@@ -1,0 +1,15 @@
+[package]
+name = "r200_uhf"
+version = "0.2.0"
+edition = "2024"
+description = "Implementation of serial protocol for reading R200 UHF chip"
+license = "MIT"
+
+
+[dependencies]
+log = "0.4.28"
+env_logger = "0.11.8"
+serialport = "4.8.1"
+
+[[example]]
+name = "std_pc_serial"
