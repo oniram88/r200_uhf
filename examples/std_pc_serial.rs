@@ -53,7 +53,7 @@ TRANSMISSION POWER: 23.6 W
 The working range could be between 15 and 26 for this chip.
 Having not found a national update that allows a power greater than that provided by
 ETSI for 867.9 MHz in that portion (0.5 W ERP),
-the safe assumption is that in Italy the limit for 867.9 MHz remains 0.5 W ERP,
+the safe assumption is that in Europe the limit for 867.9 MHz remains 0.5 W ERP,
 as a common technical interpretation.
 */
 const POWER_TRANSMISSION: f64 = 23.6;
