@@ -331,7 +331,11 @@ mod tests {
     use std::time::Duration;
 
     // Helper: build a device->PC frame with given command code and data bytes
-    fn make_frame(cmd: u8, data: &[u8]) -> Vec<u8> {
+    // cmd: command code for the request
+    // param: optional parameter byte (e.g. channel code)
+    // data: response data
+    //
+    fn make_frame(cmd: u8,param:Option<u8>, data: &[u8]) -> ResponseType {
         let mut v = Vec::new();
         v.push(R200_FRAME_HEADER);
         v.push(0x01); // frame type: from device to PC (arbitrary for tests)
@@ -344,14 +348,29 @@ mod tests {
         let sum: u16 = v[2..].iter().map(|&b| b as u16).sum();
         v.push((sum & 0xFF) as u8);
         v.push(R200_FRAME_END);
-        v
+
+        ResponseType::Ok(        MockChat{
+            request: (cmd,param),
+            responses: Ok(v)
+        })
+
+    }
+
+    fn make_error_frame(i: io::Error )-> ResponseType{
+        ResponseType::Error(i)
+    }
+
+    enum ResponseType{
+        Ok(MockChat),
+        Error(io::Error),
+        Raw(Vec<u8>),
     }
 
     #[derive(Default)]
     struct MockState {
         writes: Vec<Vec<u8>>, // captured writes
         // queue of reads to return on successive read() calls
-        reads: Vec<io::Result<Vec<u8>>>,
+        chats: Vec<ResponseType>,
         timeout: Duration,
     }
 
@@ -359,10 +378,19 @@ mod tests {
         state: Arc<Mutex<MockState>>,
     }
 
+    struct MockChat {
+        request: (u8, Option<u8>),
+        responses: io::Result<Vec<u8>>,
+    }
+
     impl MockSerialPort {
-        fn new(reads: Vec<io::Result<Vec<u8>>>) -> Self {
+        fn new(chats: Vec<ResponseType>) -> Self {
             Self {
-                state: Arc::new(Mutex::new(MockState { writes: vec![], reads, timeout: Duration::from_millis(50) })),
+                state: Arc::new(Mutex::new(MockState {
+                    writes: vec![],
+                    chats,
+                    timeout: Duration::from_millis(50),
+                })),
             }
         }
         fn take_writes(&self) -> Vec<Vec<u8>> {
@@ -376,19 +404,54 @@ mod tests {
     impl Read for MockSerialPort {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             let mut st = self.state.lock().unwrap();
-            if st.reads.is_empty() {
+
+            let writes = st.writes.clone();
+
+            if st.chats.is_empty() {
                 // simulate timeout when no more data
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "timeout"));
             }
-            let next = st.reads.remove(0);
+            let next = st.chats.remove(0);
+
+            // TODO non sto ancora controllando il parametro corretto
             match next {
-                Ok(bytes) => {
+                ResponseType::Ok(n) => {
+                    if let Some(last_write) = writes.last() {
+                        let request_command = last_write[2];
+                        if n.request.0 == request_command {
+                            match n.responses {
+                                Ok(bytes) => {
+                                    let n = bytes.len().min(buf.len());
+                                    buf[..n].copy_from_slice(&bytes[..n]);
+                                    Ok(n)
+                                }
+                                Err(e) => Err(e),
+                            }
+                        } else {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "Sequenza di comandi non prevista",
+                            ));
+                        }
+                    }else{
+                        // nel caso non abbiamo ricevuto nessuno comando di scrittura vuol dire
+                        // che stiamo semplicemente leggendo una sequenza di frame
+                        let bytes = n.responses.unwrap();
+                        let n = bytes.len().min(buf.len());
+                        buf[..n].copy_from_slice(&bytes[..n]);
+                        Ok(n)
+                    }
+                }
+                ResponseType::Error(e) => {
+                    return Err(e)
+                }
+                ResponseType::Raw(bytes) => {
                     let n = bytes.len().min(buf.len());
                     buf[..n].copy_from_slice(&bytes[..n]);
                     Ok(n)
                 }
-                Err(e) => Err(e),
             }
+
         }
     }
 
@@ -398,45 +461,100 @@ mod tests {
             st.writes.push(buf.to_vec());
             Ok(buf.len())
         }
-        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     impl SerialPort for MockSerialPort {
-        fn name(&self) -> Option<String> { Some("mock".into()) }
-        fn baud_rate(&self) -> serialport::Result<u32> { Ok(115200) }
-        fn data_bits(&self) -> serialport::Result<DataBits> { Ok(DataBits::Eight) }
-        fn flow_control(&self) -> serialport::Result<FlowControl> { Ok(FlowControl::None) }
-        fn parity(&self) -> serialport::Result<Parity> { Ok(Parity::None) }
-        fn stop_bits(&self) -> serialport::Result<StopBits> { Ok(StopBits::One) }
-        fn timeout(&self) -> Duration { self.state.lock().unwrap().timeout }
-        fn set_baud_rate(&mut self, _baud_rate: u32) -> serialport::Result<()> { Ok(()) }
-        fn set_data_bits(&mut self, _data_bits: DataBits) -> serialport::Result<()> { Ok(()) }
-        fn set_flow_control(&mut self, _flow_control: FlowControl) -> serialport::Result<()> { Ok(()) }
-        fn set_parity(&mut self, _parity: Parity) -> serialport::Result<()> { Ok(()) }
-        fn set_stop_bits(&mut self, _stop_bits: StopBits) -> serialport::Result<()> { Ok(()) }
-        fn set_timeout(&mut self, timeout: Duration) -> serialport::Result<()> { self.state.lock().unwrap().timeout = timeout; Ok(()) }
-        fn write_request_to_send(&mut self, _level: bool) -> serialport::Result<()> { Ok(()) }
-        fn write_data_terminal_ready(&mut self, _level: bool) -> serialport::Result<()> { Ok(()) }
-        fn read_clear_to_send(&mut self) -> serialport::Result<bool> { Ok(true) }
-        fn read_data_set_ready(&mut self) -> serialport::Result<bool> { Ok(true) }
-        fn read_ring_indicator(&mut self) -> serialport::Result<bool> { Ok(false) }
-        fn read_carrier_detect(&mut self) -> serialport::Result<bool> { Ok(true) }
-        fn bytes_to_read(&self) -> serialport::Result<u32> { Ok(0) }
-        fn bytes_to_write(&self) -> serialport::Result<u32> { Ok(0) }
-        fn clear(&self, _buffer_to_clear: ClearBuffer) -> serialport::Result<()> { Ok(()) }
-        fn try_clone(&self) -> serialport::Result<Box<dyn SerialPort>> { Ok(Box::new(MockSerialPort { state: self.state.clone() })) }
-        fn set_break(&self) -> serialport::Result<()> { Ok(()) }
-        fn clear_break(&self) -> serialport::Result<()> { Ok(()) }
+        fn name(&self) -> Option<String> {
+            Some("mock".into())
+        }
+        fn baud_rate(&self) -> serialport::Result<u32> {
+            Ok(115200)
+        }
+        fn data_bits(&self) -> serialport::Result<DataBits> {
+            Ok(DataBits::Eight)
+        }
+        fn flow_control(&self) -> serialport::Result<FlowControl> {
+            Ok(FlowControl::None)
+        }
+        fn parity(&self) -> serialport::Result<Parity> {
+            Ok(Parity::None)
+        }
+        fn stop_bits(&self) -> serialport::Result<StopBits> {
+            Ok(StopBits::One)
+        }
+        fn timeout(&self) -> Duration {
+            self.state.lock().unwrap().timeout
+        }
+        fn set_baud_rate(&mut self, _baud_rate: u32) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn set_data_bits(&mut self, _data_bits: DataBits) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn set_flow_control(&mut self, _flow_control: FlowControl) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn set_parity(&mut self, _parity: Parity) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn set_stop_bits(&mut self, _stop_bits: StopBits) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn set_timeout(&mut self, timeout: Duration) -> serialport::Result<()> {
+            self.state.lock().unwrap().timeout = timeout;
+            Ok(())
+        }
+        fn write_request_to_send(&mut self, _level: bool) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn write_data_terminal_ready(&mut self, _level: bool) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn read_clear_to_send(&mut self) -> serialport::Result<bool> {
+            Ok(true)
+        }
+        fn read_data_set_ready(&mut self) -> serialport::Result<bool> {
+            Ok(true)
+        }
+        fn read_ring_indicator(&mut self) -> serialport::Result<bool> {
+            Ok(false)
+        }
+        fn read_carrier_detect(&mut self) -> serialport::Result<bool> {
+            Ok(true)
+        }
+        fn bytes_to_read(&self) -> serialport::Result<u32> {
+            Ok(0)
+        }
+        fn bytes_to_write(&self) -> serialport::Result<u32> {
+            Ok(0)
+        }
+        fn clear(&self, _buffer_to_clear: ClearBuffer) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn try_clone(&self) -> serialport::Result<Box<dyn SerialPort>> {
+            Ok(Box::new(MockSerialPort {
+                state: self.state.clone(),
+            }))
+        }
+        fn set_break(&self) -> serialport::Result<()> {
+            Ok(())
+        }
+        fn clear_break(&self) -> serialport::Result<()> {
+            Ok(())
+        }
     }
 
     // ----- Tests -----
 
     #[test]
     fn test_get_module_info() {
-        let hw = make_frame(0x03, b"HW1.0");
-        let sw = make_frame(0x03, b"SW2.0");
-        let mf = make_frame(0x03, b"ACME");
-        let mock = MockSerialPort::new(vec![Ok(hw), Ok(sw), Ok(mf)]);
+        let hw = make_frame(0x03,Some(0x01), b"HW1.0");
+        let sw = make_frame(0x03,Some(0x02), b"SW2.0");
+        let mf = make_frame(0x03,Some(0x03), b"ACME");
+        let mock = MockSerialPort::new(vec![hw, sw, mf]);
         let mut connector = Connector::new(Box::new(mock));
 
         let info = connector.get_module_info().unwrap();
@@ -447,9 +565,15 @@ mod tests {
 
     #[test]
     fn test_get_working_area_mapping() {
-        for (code, expected) in [(0, WorkingArea::China900Mhz), (1, WorkingArea::China800Mhz), (2, WorkingArea::US), (3, WorkingArea::EU), (4, WorkingArea::Korea)] {
-            let frame = make_frame(0x08, &[code]);
-            let mock = MockSerialPort::new(vec![Ok(frame.clone())]);
+        for (code, expected) in [
+            (0, WorkingArea::China900Mhz),
+            (1, WorkingArea::China800Mhz),
+            (2, WorkingArea::US),
+            (3, WorkingArea::EU),
+            (4, WorkingArea::Korea),
+        ] {
+            let frame = make_frame(0x08,None, &[code]);
+            let mock = MockSerialPort::new(vec![frame]);
             let mut connector = Connector::new(Box::new(mock));
             let area = connector.get_working_area().unwrap();
             // Compare by variant name via debug
@@ -461,9 +585,9 @@ mod tests {
     fn test_get_working_channel_uses_area() {
         // Channel index 4 -> depends on area. We'll test EU mapping: 0.2 MHz step + 865.1
         // First response: channel index, Second: area code 3 (EU)
-        let chan = make_frame(0xAA, &[4]);
-        let area = make_frame(0x08, &[3]);
-        let mock = MockSerialPort::new(vec![Ok(chan), Ok(area)]);
+        let chan = make_frame(0xAA,None, &[4]);
+        let area = make_frame(0x08,None, &[3]);
+        let mock = MockSerialPort::new(vec![chan, area]);
         let mut connector = Connector::new(Box::new(mock));
         let freq = connector.get_working_channel().unwrap();
         assert!((freq - (4.0 * 0.2 + 865.1)).abs() < 1e-6);
@@ -472,8 +596,8 @@ mod tests {
     #[test]
     fn test_get_transmit_power() {
         // 27.50 -> 2750 -> 0x0A BE (for example 0x0A, 0xBE => 2750)
-        let frame = make_frame(0xB7, &[0x0A, 0xBE]);
-        let mock = MockSerialPort::new(vec![Ok(frame)]);
+        let frame = make_frame(0xB7,Some(0x01), &[0x0A, 0xBE]);
+        let mock = MockSerialPort::new(vec![frame]);
         let mut connector = Connector::new(Box::new(mock));
         let p = connector.get_transmit_power().unwrap();
         assert!((p - 27.50).abs() < 1e-6);
@@ -482,8 +606,8 @@ mod tests {
     #[test]
     fn test_set_transmission_power_ack() {
         // ACK byte 0x00
-        let frame = make_frame(0xB6, &[0x00]);
-        let mock = MockSerialPort::new(vec![Ok(frame)]);
+        let frame = make_frame(0xB6,Some(0x01), &[0x00]);
+        let mock = MockSerialPort::new(vec![frame]);
         let mut connector = Connector::new(Box::new(mock));
         connector.set_trasmission_power(30.0).unwrap();
     }
@@ -493,25 +617,23 @@ mod tests {
         // Build two tag frames then a timeout to end collection
         let tag1 = {
             let data = vec![
-                55,       // RSSI
+                55, // RSSI
                 0x30, 0x12, // PC = 0x3012
                 0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05, // EPC 9 bytes (3..11)
                 0x00, 0x00, 0x00, // padding to reach index 15
-                0xAB, 0xCD,  // CRC bytes at 15,16
+                0xAB, 0xCD, // CRC bytes at 15,16
             ];
-            make_frame(0x22, &data)
+            make_frame(0x22,None, &data)
         };
         let tag2 = {
             let data = vec![
-                60, 0x20, 0x34,
-                0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
-                0x00, 0x00, 0x00,
-                0x12, 0x34,
+                60, 0x20, 0x34, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0x00,
+                0x00, 0x12, 0x34,
             ];
-            make_frame(0x22, &data)
+            make_frame(0x22,None, &data)
         };
-        let timeout = Err(io::Error::new(io::ErrorKind::TimedOut, "done"));
-        let mock = MockSerialPort::new(vec![Ok(tag1), Ok(tag2), timeout]);
+        let timeout = make_error_frame(io::Error::new(io::ErrorKind::TimedOut, "done"));
+        let mock = MockSerialPort::new(vec![tag1, tag2, timeout]);
         let mut connector = Connector::new(Box::new(mock));
         let tags = connector.single_polling_instruction().unwrap();
         assert_eq!(tags.len(), 2);
@@ -525,9 +647,14 @@ mod tests {
     fn test_read_from_serial_noise_and_multiple_frames() {
         // Noise bytes, then two frames in one read, then timeout to finish
         let noise = vec![0x00, 0xFF, 0x13, 0x37];
-        let f1 = make_frame(0x08, &[2]);
-        let f2 = make_frame(0xAA, &[7]);
-        let mock = MockSerialPort::new(vec![Ok(noise), Ok(f1), Ok(f2), Err(io::Error::new(io::ErrorKind::TimedOut, "t"))]);
+        let f1 = make_frame(0x08,None, &[2]);
+        let f2 = make_frame(0xAA,None, &[7]);
+        let mock = MockSerialPort::new(vec![
+            ResponseType::Raw(noise),
+            f1,
+            f2,
+            make_error_frame(io::Error::new(io::ErrorKind::TimedOut, "t")),
+        ]);
         let mut connector = Connector::new(Box::new(mock));
         let out = connector.read_from_serial(None).unwrap().unwrap();
         assert_eq!(out.len(), 2);
