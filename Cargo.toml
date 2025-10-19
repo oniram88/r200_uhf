@@ -4,6 +4,7 @@ version = "0.2.0"
 edition = "2024"
 description = "Implementation of serial protocol for reading R200 UHF chip"
 license = "MIT"
+repository = "https://github.com/oniram88/r200_uhf"
 
 
 [dependencies]
