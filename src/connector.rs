@@ -335,7 +335,7 @@ mod tests {
     // param: optional parameter byte (e.g. channel code)
     // data: response data
     //
-    fn make_frame(cmd: u8,param:Option<u8>, data: &[u8]) -> ResponseType {
+    fn make_frame(cmd: u8, param: Option<Vec<u8>>, data: &[u8]) -> ResponseType {
         let mut v = Vec::new();
         v.push(R200_FRAME_HEADER);
         v.push(0x01); // frame type: from device to PC (arbitrary for tests)
@@ -349,18 +349,17 @@ mod tests {
         v.push((sum & 0xFF) as u8);
         v.push(R200_FRAME_END);
 
-        ResponseType::Ok(        MockChat{
-            request: (cmd,param),
-            responses: Ok(v)
+        ResponseType::Ok(MockChat {
+            request: (cmd, param),
+            responses: Ok(v),
         })
-
     }
 
-    fn make_error_frame(i: io::Error )-> ResponseType{
+    fn make_error_frame(i: io::Error) -> ResponseType {
         ResponseType::Error(i)
     }
 
-    enum ResponseType{
+    enum ResponseType {
         Ok(MockChat),
         Error(io::Error),
         Raw(Vec<u8>),
@@ -379,7 +378,7 @@ mod tests {
     }
 
     struct MockChat {
-        request: (u8, Option<u8>),
+        request: (u8, Option<Vec<u8>>),
         responses: io::Result<Vec<u8>>,
     }
 
@@ -413,12 +412,29 @@ mod tests {
             }
             let next = st.chats.remove(0);
 
-            // TODO non sto ancora controllando il parametro corretto
             match next {
                 ResponseType::Ok(n) => {
                     if let Some(last_write) = writes.last() {
                         let request_command = last_write[2];
-                        if n.request.0 == request_command {
+
+                        // check del parametro
+                        let parameter_is_valid: bool;
+
+                        if let Some(p) = n.request.1 {
+                            // controllo che sia impostato il valore 1 di lunghezza parametri (posizione 4) e
+                            // che il parametro sia impostato corettamente (posizione 5)
+                            let params = &last_write[5..5 + p.len()];
+                            if last_write[4] == (p.len() as u8) && p == params {
+                                parameter_is_valid = true;
+                            } else {
+                                parameter_is_valid = false;
+                            }
+                        } else {
+
+                            parameter_is_valid = true
+                        }
+
+                        if n.request.0 == request_command && parameter_is_valid {
                             match n.responses {
                                 Ok(bytes) => {
                                     let n = bytes.len().min(buf.len());
@@ -433,7 +449,7 @@ mod tests {
                                 "Sequenza di comandi non prevista",
                             ));
                         }
-                    }else{
+                    } else {
                         // nel caso non abbiamo ricevuto nessuno comando di scrittura vuol dire
                         // che stiamo semplicemente leggendo una sequenza di frame
                         let bytes = n.responses.unwrap();
@@ -442,16 +458,13 @@ mod tests {
                         Ok(n)
                     }
                 }
-                ResponseType::Error(e) => {
-                    return Err(e)
-                }
+                ResponseType::Error(e) => return Err(e),
                 ResponseType::Raw(bytes) => {
                     let n = bytes.len().min(buf.len());
                     buf[..n].copy_from_slice(&bytes[..n]);
                     Ok(n)
                 }
             }
-
         }
     }
 
@@ -551,9 +564,9 @@ mod tests {
 
     #[test]
     fn test_get_module_info() {
-        let hw = make_frame(0x03,Some(0x01), b"HW1.0");
-        let sw = make_frame(0x03,Some(0x02), b"SW2.0");
-        let mf = make_frame(0x03,Some(0x03), b"ACME");
+        let hw = make_frame(0x03, Some(vec![0x00]), b"HW1.0");
+        let sw = make_frame(0x03, Some(vec![0x01]), b"SW2.0");
+        let mf = make_frame(0x03, Some(vec![0x02]), b"ACME");
         let mock = MockSerialPort::new(vec![hw, sw, mf]);
         let mut connector = Connector::new(Box::new(mock));
 
@@ -572,7 +585,7 @@ mod tests {
             (3, WorkingArea::EU),
             (4, WorkingArea::Korea),
         ] {
-            let frame = make_frame(0x08,None, &[code]);
+            let frame = make_frame(0x08, None, &[code]);
             let mock = MockSerialPort::new(vec![frame]);
             let mut connector = Connector::new(Box::new(mock));
             let area = connector.get_working_area().unwrap();
@@ -585,8 +598,8 @@ mod tests {
     fn test_get_working_channel_uses_area() {
         // Channel index 4 -> depends on area. We'll test EU mapping: 0.2 MHz step + 865.1
         // First response: channel index, Second: area code 3 (EU)
-        let chan = make_frame(0xAA,None, &[4]);
-        let area = make_frame(0x08,None, &[3]);
+        let chan = make_frame(0xAA, None, &[4]);
+        let area = make_frame(0x08, None, &[3]);
         let mock = MockSerialPort::new(vec![chan, area]);
         let mut connector = Connector::new(Box::new(mock));
         let freq = connector.get_working_channel().unwrap();
@@ -596,7 +609,7 @@ mod tests {
     #[test]
     fn test_get_transmit_power() {
         // 27.50 -> 2750 -> 0x0A BE (for example 0x0A, 0xBE => 2750)
-        let frame = make_frame(0xB7,Some(0x01), &[0x0A, 0xBE]);
+        let frame = make_frame(0xB7, None, &[0x0A, 0xBE]);
         let mock = MockSerialPort::new(vec![frame]);
         let mut connector = Connector::new(Box::new(mock));
         let p = connector.get_transmit_power().unwrap();
@@ -606,10 +619,10 @@ mod tests {
     #[test]
     fn test_set_transmission_power_ack() {
         // ACK byte 0x00
-        let frame = make_frame(0xB6,Some(0x01), &[0x00]);
+        let frame = make_frame(0xB6, Some(vec![0x07, 0xD0]), &[0x00]);
         let mock = MockSerialPort::new(vec![frame]);
         let mut connector = Connector::new(Box::new(mock));
-        connector.set_trasmission_power(30.0).unwrap();
+        connector.set_trasmission_power(20.0).unwrap();
     }
 
     #[test]
@@ -623,14 +636,14 @@ mod tests {
                 0x00, 0x00, 0x00, // padding to reach index 15
                 0xAB, 0xCD, // CRC bytes at 15,16
             ];
-            make_frame(0x22,None, &data)
+            make_frame(0x22, None, &data)
         };
         let tag2 = {
             let data = vec![
                 60, 0x20, 0x34, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0x00,
                 0x00, 0x12, 0x34,
             ];
-            make_frame(0x22,None, &data)
+            make_frame(0x22, None, &data)
         };
         let timeout = make_error_frame(io::Error::new(io::ErrorKind::TimedOut, "done"));
         let mock = MockSerialPort::new(vec![tag1, tag2, timeout]);
@@ -647,8 +660,8 @@ mod tests {
     fn test_read_from_serial_noise_and_multiple_frames() {
         // Noise bytes, then two frames in one read, then timeout to finish
         let noise = vec![0x00, 0xFF, 0x13, 0x37];
-        let f1 = make_frame(0x08,None, &[2]);
-        let f2 = make_frame(0xAA,None, &[7]);
+        let f1 = make_frame(0x08, None, &[2]);
+        let f2 = make_frame(0xAA, None, &[7]);
         let mock = MockSerialPort::new(vec![
             ResponseType::Raw(noise),
             f1,
