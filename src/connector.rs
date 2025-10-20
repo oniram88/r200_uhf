@@ -21,6 +21,7 @@ pub enum ConnectorError {
     Timeout,
     InvalidWorkingArea,
     NoPacketReceived,
+    FailedSetting(String),
     SerialRead(String),
 }
 
@@ -32,6 +33,7 @@ impl fmt::Display for ConnectorError {
             ConnectorError::InvalidWorkingArea => write!(f, "Invalid working area"),
             ConnectorError::NoPacketReceived => write!(f, "No packet received"),
             ConnectorError::SerialRead(msg) => write!(f, "Serial read error: {}", msg),
+            ConnectorError::FailedSetting(msg) => write!(f, "Failed Setting: {}", msg),
         }
     }
 }
@@ -272,6 +274,9 @@ impl Connector {
             if data[0] == 0x00 {
                 info!("Power correct set to {}", power);
                 return Ok(());
+            }else{
+                error!("Power not set to {}", power);
+                return Err(ConnectorError::FailedSetting(format!("Transmission power not set to {}", power)));
             }
         }
         Err(ConnectorError::NoPacketReceived)
