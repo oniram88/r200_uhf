@@ -152,3 +152,99 @@ impl Frame {
         (sum & 0xFF) as u8
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame_bytes(cmd: Command) -> Vec<u8> {
+        Frame::new(&cmd).to_bytes()
+    }
+
+    #[test]
+    fn hardware_version_frame_bytes() {
+        let bytes = frame_bytes(Command::HardwareVersion);
+        let expected = vec![0xAA, 0x00, 0x03, 0x00, 0x01, 0x00, 0x04, 0xDD];
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn software_version_frame_bytes() {
+        let bytes = frame_bytes(Command::SoftwareVersion);
+        let expected = vec![0xAA, 0x00, 0x03, 0x00, 0x01, 0x01, 0x05, 0xDD];
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn manufacturer_frame_bytes() {
+        let bytes = frame_bytes(Command::Manufacturer);
+        let expected = vec![0xAA, 0x00, 0x03, 0x00, 0x01, 0x02, 0x06, 0xDD];
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn get_working_channel_frame_bytes() {
+        let bytes = frame_bytes(Command::GetWorkingChannel);
+        let expected = vec![0xAA, 0x00, 0xAA, 0x00, 0x00, 0xAA, 0xDD];
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn single_polling_instruction_frame_bytes() {
+        let bytes = frame_bytes(Command::SinglePollingInstruction);
+        let expected = vec![0xAA, 0x00, 0x22, 0x00, 0x00, 0x22, 0xDD];
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn acquire_transmit_power_frame_bytes() {
+        let bytes = frame_bytes(Command::AcquireTransmitPower);
+        let expected = vec![0xAA, 0x00, 0xB7, 0x00, 0x00, 0xB7, 0xDD];
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn set_transmission_power_frame_bytes() {
+        // 26.50 dBm -> 2650 -> 0x0A 0x5A
+        let bytes = frame_bytes(Command::SetTrasmissionPower(26.50));
+        let expected = vec![0xAA, 0x00, 0xB6, 0x00, 0x02, 0x0A, 0x5A, 0x1C, 0xDD];
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn serializable_command_to_bytes_and_from_tuple() {
+        // to_bytes
+        assert_eq!(Command::HardwareVersion.to_bytes(), (vec![0x03], vec![0x00]));
+        assert_eq!(Command::SoftwareVersion.to_bytes(), (vec![0x03], vec![0x01]));
+        assert_eq!(Command::Manufacturer.to_bytes(), (vec![0x03], vec![0x02]));
+        assert_eq!(Command::GetWorkingChannel.to_bytes(), (vec![0xAA], vec![]));
+        assert_eq!(Command::GetWorkingArea.to_bytes(), (vec![0x08], vec![]));
+        assert_eq!(Command::AcquireTransmitPower.to_bytes(), (vec![0xB7], vec![]));
+
+        let (cmd, params) = Command::SetTrasmissionPower(26.5).to_bytes();
+        assert_eq!(cmd, vec![0xB6]);
+        assert_eq!(params, vec![0x0A, 0x5A]); // 26.5 dBm -> 2650 -> 0x0A 0x5A
+
+        // from_tuple
+        assert!(matches!(Command::from_tuple((vec![0x03], vec![0x00])), Ok(Command::HardwareVersion)));
+        assert!(matches!(Command::from_tuple((vec![0x03], vec![0x01])), Ok(Command::SoftwareVersion)));
+        assert!(matches!(Command::from_tuple((vec![0x03], vec![0x02])), Ok(Command::Manufacturer)));
+        assert!(matches!(Command::from_tuple((vec![0xAA], vec![0x00])), Ok(Command::GetWorkingChannel)));
+        assert!(matches!(Command::from_tuple((vec![0x08], vec![0x00])), Ok(Command::GetWorkingArea)));
+        assert!(matches!(Command::from_tuple((vec![0xB7], vec![0x00])), Ok(Command::AcquireTransmitPower)));
+    }
+
+    #[test]
+    fn from_tuple_invalid_command_errors() {
+        // Unknown subcode for module info
+        let err = Command::from_tuple((vec![0x03], vec![0xFF])).err().expect("expected error");
+        let msg = format!("{}", err);
+        assert!(msg.contains("Invalid command"));
+
+        // Unknown main code
+        let err = Command::from_tuple((vec![0x99], vec![0x00])).err().expect("expected error");
+        let msg = format!("{}", err);
+        assert!(msg.contains("Invalid command"));
+    }
+}
