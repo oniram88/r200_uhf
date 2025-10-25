@@ -134,4 +134,23 @@ mod tests {
         // Command::from_tuple ignores the second element for these commands, so this should still work.
         assert!(matches!(p.command().unwrap(), Command::GetWorkingChannel));
     }
+
+    #[test]
+    fn packet_validity(){
+        let correct_bytes = build_packet(0x00, 0x03, &[
+            0x00,0x01,0x02
+        ]);
+
+         let p = Packet::new(correct_bytes.clone());
+        assert!(p.is_valid());
+
+        let mut incorrect_bytes = correct_bytes.clone();
+        incorrect_bytes[4] = 0x10;
+        let p = Packet::new(incorrect_bytes);
+        assert!(!p.is_valid());
+
+
+
+
+    }
 }
