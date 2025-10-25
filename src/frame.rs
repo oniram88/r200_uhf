@@ -32,6 +32,8 @@ pub(crate) enum Command {
     SoftwareVersion,
     Manufacturer,
     SinglePollingInstruction,
+    MultiplePollingInstruction(u16),
+    StopMultiplePollingInstruction,
 }
 
 impl Display for Command {
@@ -45,6 +47,10 @@ impl Display for Command {
             Command::AcquireTransmitPower => write!(f, "Acquire transmit power"),
             Command::SetTrasmissionPower(power) => write!(f, "Set transmission power to {}", power),
             Command::SinglePollingInstruction => write!(f, "Single Polling Instruction"),
+            Command::MultiplePollingInstruction(max) => {
+                write!(f, "Multiple Polling Instruction [max: {max} times]")
+            }
+            Command::StopMultiplePollingInstruction => write!(f, "Stop Multiple Polling Instruction"),
         }
     }
 }
@@ -89,6 +95,13 @@ impl SerializableCommand for Command {
                 (vec![0xB6], v)
             }
             Command::SinglePollingInstruction => (vec![0x22], vec![]),
+            Command::MultiplePollingInstruction(max) => {
+                let mut v = Vec::new();
+                v.push((max >> 8) as u8);
+                v.push((max & 0xFF) as u8);
+                (vec![0x27], v)
+            },
+            Command::StopMultiplePollingInstruction=> (vec![0x28], vec![]),
         }
     }
 
@@ -153,7 +166,6 @@ impl Frame {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,35 +227,66 @@ mod tests {
     #[test]
     fn serializable_command_to_bytes_and_from_tuple() {
         // to_bytes
-        assert_eq!(Command::HardwareVersion.to_bytes(), (vec![0x03], vec![0x00]));
-        assert_eq!(Command::SoftwareVersion.to_bytes(), (vec![0x03], vec![0x01]));
+        assert_eq!(
+            Command::HardwareVersion.to_bytes(),
+            (vec![0x03], vec![0x00])
+        );
+        assert_eq!(
+            Command::SoftwareVersion.to_bytes(),
+            (vec![0x03], vec![0x01])
+        );
         assert_eq!(Command::Manufacturer.to_bytes(), (vec![0x03], vec![0x02]));
         assert_eq!(Command::GetWorkingChannel.to_bytes(), (vec![0xAA], vec![]));
         assert_eq!(Command::GetWorkingArea.to_bytes(), (vec![0x08], vec![]));
-        assert_eq!(Command::AcquireTransmitPower.to_bytes(), (vec![0xB7], vec![]));
+        assert_eq!(
+            Command::AcquireTransmitPower.to_bytes(),
+            (vec![0xB7], vec![])
+        );
 
         let (cmd, params) = Command::SetTrasmissionPower(26.5).to_bytes();
         assert_eq!(cmd, vec![0xB6]);
         assert_eq!(params, vec![0x0A, 0x5A]); // 26.5 dBm -> 2650 -> 0x0A 0x5A
 
         // from_tuple
-        assert!(matches!(Command::from_tuple((vec![0x03], vec![0x00])), Ok(Command::HardwareVersion)));
-        assert!(matches!(Command::from_tuple((vec![0x03], vec![0x01])), Ok(Command::SoftwareVersion)));
-        assert!(matches!(Command::from_tuple((vec![0x03], vec![0x02])), Ok(Command::Manufacturer)));
-        assert!(matches!(Command::from_tuple((vec![0xAA], vec![0x00])), Ok(Command::GetWorkingChannel)));
-        assert!(matches!(Command::from_tuple((vec![0x08], vec![0x00])), Ok(Command::GetWorkingArea)));
-        assert!(matches!(Command::from_tuple((vec![0xB7], vec![0x00])), Ok(Command::AcquireTransmitPower)));
+        assert!(matches!(
+            Command::from_tuple((vec![0x03], vec![0x00])),
+            Ok(Command::HardwareVersion)
+        ));
+        assert!(matches!(
+            Command::from_tuple((vec![0x03], vec![0x01])),
+            Ok(Command::SoftwareVersion)
+        ));
+        assert!(matches!(
+            Command::from_tuple((vec![0x03], vec![0x02])),
+            Ok(Command::Manufacturer)
+        ));
+        assert!(matches!(
+            Command::from_tuple((vec![0xAA], vec![0x00])),
+            Ok(Command::GetWorkingChannel)
+        ));
+        assert!(matches!(
+            Command::from_tuple((vec![0x08], vec![0x00])),
+            Ok(Command::GetWorkingArea)
+        ));
+        assert!(matches!(
+            Command::from_tuple((vec![0xB7], vec![0x00])),
+            Ok(Command::AcquireTransmitPower)
+        ));
     }
 
     #[test]
     fn from_tuple_invalid_command_errors() {
         // Unknown subcode for module info
-        let err = Command::from_tuple((vec![0x03], vec![0xFF])).err().expect("expected error");
+        let err = Command::from_tuple((vec![0x03], vec![0xFF]))
+            .err()
+            .expect("expected error");
         let msg = format!("{}", err);
         assert!(msg.contains("Invalid command"));
 
         // Unknown main code
-        let err = Command::from_tuple((vec![0x99], vec![0x00])).err().expect("expected error");
+        let err = Command::from_tuple((vec![0x99], vec![0x00]))
+            .err()
+            .expect("expected error");
         let msg = format!("{}", err);
         assert!(msg.contains("Invalid command"));
     }

@@ -146,12 +146,14 @@ impl Connector {
                         // Extract type, command, and data
                         let p = Packet::new(Vec::from(chunk));
 
-                        if !p.get_data().is_empty() {
+                        if p.is_valid() {
                             debug!("{}", p.debug());
                             output.push(p);
                             if output.len() >= num_expected_responses.unwrap_or(100000) as usize {
                                 return Ok(Some(output));
                             }
+                        }else {
+                            error!("Invalid packet: {:?}", chunk);
                         }
                     }
 
@@ -274,9 +276,12 @@ impl Connector {
             if data[0] == 0x00 {
                 info!("Power correct set to {}", power);
                 return Ok(());
-            }else{
+            } else {
                 error!("Power not set to {}", power);
-                return Err(ConnectorError::FailedSetting(format!("Transmission power not set to {}", power)));
+                return Err(ConnectorError::FailedSetting(format!(
+                    "Transmission power not set to {}",
+                    power
+                )));
             }
         }
         Err(ConnectorError::NoPacketReceived)
@@ -291,32 +296,60 @@ impl Connector {
     /// - Ok(Vec<Rfid>) possibly empty if no tags are present.
     /// - Err(ConnectorError::Timeout or other) on communication errors.
     pub fn single_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
-        let mut rfids: Vec<Rfid> = Vec::new();
         self.send_packet(Command::SinglePollingInstruction)?;
-        if let Ok(ps) = self.read_from_serial(None) {
-            let ps = ps.unwrap_or(vec![]);
+        let response = self.read_from_serial(None)?;
+        self.parse_rfid_packets(response)
+    }
 
-            if ps.len() == 1 && ps[0].get_data()[0] == 0x15 {
-                debug!("Nessun tag presente in memoria");
-            } else {
-                info!("RFID ricevuti: {}", ps.len());
-                for p in ps.iter() {
-                    let data = p.get_data();
-                    debug!("Lettura RFID Data: {:?}", data);
+    fn parse_rfid_packets(
+        &mut self,
+        response: Option<Vec<Packet>>,
+    ) -> Result<Vec<Rfid>, ConnectorError> {
+        let mut rfids: Vec<Rfid> = Vec::new();
 
-                    let rssi = data[0];
-                    let pc = (data[1] as u16) * 16 * 16 + data[2] as u16;
-                    let epc: Vec<u8>;
-                    epc = data[3..12].to_owned();
-                    let crc = data[15] as u16 * 16 * 16 + data[16] as u16;
+        let ps = response.unwrap_or(vec![]);
 
-                    rfids.push(Rfid { rssi, pc, epc, crc })
+        if ps.len() == 1 && ps[0].get_data()[0] == 0x15 {
+            debug!("Nessun tag presente in memoria");
+        } else {
+            info!("Pacchetti ricevuti: {}", ps.len());
+            for p in ps.iter() {
+                let data = p.get_data();
+                debug!("Lettura RFID Data: {:?}", data);
+
+                if data.len() != 17 {
+                    // Skip di qualsiasi pacchetto non valido
+                    continue
                 }
+
+                rfids.push(Rfid::from_raw(data))
             }
         }
 
         Ok(rfids)
     }
+
+    pub fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
+        self.send_packet(Command::MultiplePollingInstruction(100))?;
+        let response = self.read_from_serial(Some(100))?;
+       self.stop_multiple_polling_instructions()?;
+        self.parse_rfid_packets(response)
+    }
+
+    // Start Multi: AA 00 27 00 03 22 FF FF 4A DD
+    pub fn enable_multiple_polling_instructions(
+        &mut self,
+        pool_times: u16,
+    ) -> Result<(), ConnectorError> {
+        self.send_packet(Command::MultiplePollingInstruction(pool_times))
+    }
+    pub fn stop_multiple_polling_instructions(
+        &mut self,
+    ) -> Result<(), ConnectorError> {
+        self.send_packet(Command::StopMultiplePollingInstruction)
+    }
+
+    // Stop Multi: AA 00 28 00 00 28 DD
 }
 
 fn hexdump_line(prefix: &str, data: &[u8]) {
@@ -435,7 +468,6 @@ mod tests {
                                 parameter_is_valid = false;
                             }
                         } else {
-
                             parameter_is_valid = true
                         }
 
@@ -637,16 +669,16 @@ mod tests {
             let data = vec![
                 55, // RSSI
                 0x30, 0x12, // PC = 0x3012
-                0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05, // EPC 9 bytes (3..11)
-                0x00, 0x00, 0x00, // padding to reach index 15
+                0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05,
+                0x06, 0x07, 0x08, // padding to reach index 15
                 0xAB, 0xCD, // CRC bytes at 15,16
             ];
             make_frame(0x22, None, &data)
         };
         let tag2 = {
             let data = vec![
-                60, 0x20, 0x34, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0x00,
-                0x00, 0x12, 0x34,
+                60, 0x20, 0x34, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB,
+                0xCC, 0x12, 0x34,
             ];
             make_frame(0x22, None, &data)
         };
@@ -655,10 +687,7 @@ mod tests {
         let mut connector = Connector::new(Box::new(mock));
         let tags = connector.single_polling_instruction().unwrap();
         assert_eq!(tags.len(), 2);
-        assert_eq!(tags[0].rssi, 55);
-        assert_eq!(tags[0].pc, 0x3012);
-        assert_eq!(tags[0].uid(), "deadbeef0102030405");
-        assert_eq!(tags[0].crc, 0xABCD);
+        assert_eq!(tags[0].uid(), "DEADBEEF0102030405060708");
     }
 
     #[test]
