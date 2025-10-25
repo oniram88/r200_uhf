@@ -28,7 +28,7 @@ impl Packet {
     /// Check if packet is valid
     pub fn is_valid(&self) -> bool {
         // If length is incorrect with wath is sended
-        if 5+2+self.data_len() as usize != self.raw_data.len() {
+        if 5 + 2 + self.data_len() as usize != self.raw_data.len() {
             return false;
         }
         true
@@ -136,21 +136,15 @@ mod tests {
     }
 
     #[test]
-    fn packet_validity(){
-        let correct_bytes = build_packet(0x00, 0x03, &[
-            0x00,0x01,0x02
-        ]);
+    fn packet_validity() {
+        let correct_bytes = build_packet(0x00, 0x03, &[0x00, 0x01, 0x02]);
 
-         let p = Packet::new(correct_bytes.clone());
+        let p = Packet::new(correct_bytes.clone());
         assert!(p.is_valid());
 
         let mut incorrect_bytes = correct_bytes.clone();
         incorrect_bytes[4] = 0x10;
         let p = Packet::new(incorrect_bytes);
         assert!(!p.is_valid());
-
-
-
-
     }
 }

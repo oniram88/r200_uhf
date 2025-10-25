@@ -152,7 +152,7 @@ impl Connector {
                             if output.len() >= num_expected_responses.unwrap_or(100000) as usize {
                                 return Ok(Some(output));
                             }
-                        }else {
+                        } else {
                             error!("Invalid packet: {:?}", chunk);
                         }
                     }
@@ -319,7 +319,7 @@ impl Connector {
 
                 if data.len() != 17 {
                     // Skip di qualsiasi pacchetto non valido
-                    continue
+                    continue;
                 }
 
                 rfids.push(Rfid::from_raw(data))
@@ -332,7 +332,7 @@ impl Connector {
     pub fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
         self.send_packet(Command::MultiplePollingInstruction(100))?;
         let response = self.read_from_serial(Some(100))?;
-       self.stop_multiple_polling_instructions()?;
+        self.stop_multiple_polling_instructions()?;
         self.parse_rfid_packets(response)
     }
 
@@ -343,9 +343,7 @@ impl Connector {
     ) -> Result<(), ConnectorError> {
         self.send_packet(Command::MultiplePollingInstruction(pool_times))
     }
-    pub fn stop_multiple_polling_instructions(
-        &mut self,
-    ) -> Result<(), ConnectorError> {
+    pub fn stop_multiple_polling_instructions(&mut self) -> Result<(), ConnectorError> {
         self.send_packet(Command::StopMultiplePollingInstruction)
     }
 
@@ -669,8 +667,8 @@ mod tests {
             let data = vec![
                 55, // RSSI
                 0x30, 0x12, // PC = 0x3012
-                0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05,
-                0x06, 0x07, 0x08, // padding to reach index 15
+                0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+                0x08, // padding to reach index 15
                 0xAB, 0xCD, // CRC bytes at 15,16
             ];
             make_frame(0x22, None, &data)

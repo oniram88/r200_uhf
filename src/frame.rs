@@ -50,7 +50,9 @@ impl Display for Command {
             Command::MultiplePollingInstruction(max) => {
                 write!(f, "Multiple Polling Instruction [max: {max} times]")
             }
-            Command::StopMultiplePollingInstruction => write!(f, "Stop Multiple Polling Instruction"),
+            Command::StopMultiplePollingInstruction => {
+                write!(f, "Stop Multiple Polling Instruction")
+            }
         }
     }
 }
@@ -100,8 +102,8 @@ impl SerializableCommand for Command {
                 v.push((max >> 8) as u8);
                 v.push((max & 0xFF) as u8);
                 (vec![0x27], v)
-            },
-            Command::StopMultiplePollingInstruction=> (vec![0x28], vec![]),
+            }
+            Command::StopMultiplePollingInstruction => (vec![0x28], vec![]),
         }
     }
 

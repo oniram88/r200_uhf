@@ -1,6 +1,6 @@
-use std::collections::HashSet;
 use log::{Level, LevelFilter, info, warn};
 use r200_uhf::{Connector, Rfid};
+use std::collections::HashSet;
 use std::env;
 use std::fmt;
 use std::io::Write;
@@ -89,15 +89,16 @@ fn main() -> Result<(), AppError> {
 
     let mut connector = Connector::new(port);
 
-
     // It's possible that the device was not correct terminated and the multiple polling instruction
     // is enabled. Send a stop.
     connector.stop_multiple_polling_instructions().unwrap();
 
-
-    info!("{}",connector
-        .get_module_info()
-        .map_err(|e| AppError::Connector(e.to_string()))?);
+    info!(
+        "{}",
+        connector
+            .get_module_info()
+            .map_err(|e| AppError::Connector(e.to_string()))?
+    );
 
     info!(
         "Working area: {:?}",
@@ -137,7 +138,7 @@ fn main() -> Result<(), AppError> {
         sleep(Duration::from_millis(150));
     }*/
 
-    let mut unique_rfids: HashSet<Rfid> =  HashSet::new();
+    let mut unique_rfids: HashSet<Rfid> = HashSet::new();
 
     // Loop for 10 times with multiple polling instruction
     for sequence in 0..10 {
@@ -150,11 +151,10 @@ fn main() -> Result<(), AppError> {
 
         println!("|     SEQUENCE: {sequence}   |");
         println!("|     RFID_UNICI     |");
-            for rfid in unique_rfids.iter() {
+        for rfid in unique_rfids.iter() {
             println!("| {} |", rfid);
         }
-        println!("|  TOTAL: {}     |",unique_rfids.len());
-
+        println!("|  TOTAL: {}     |", unique_rfids.len());
     }
 
     Ok(())

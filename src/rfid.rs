@@ -7,19 +7,19 @@ pub struct Rfid {
     pub pc: String,
     pub epc: String, // also known as the tag UID
     pub crc: String,
-    pub(crate) raw: Vec<u8>
+    pub(crate) raw: Vec<u8>,
 }
 
 impl Rfid {
     pub(crate) fn from_raw(raw: Vec<u8>) -> Rfid {
         let rssi = raw[0];
 
-        Self{
-            pc:bytes_to_hex_upper(&raw[1..3].to_vec()),
-            epc:bytes_to_hex_upper(&raw[3..15]),
-            crc:bytes_to_hex_upper(&raw[15..17].to_vec()),
+        Self {
+            pc: bytes_to_hex_upper(&raw[1..3].to_vec()),
+            epc: bytes_to_hex_upper(&raw[3..15]),
+            crc: bytes_to_hex_upper(&raw[15..17].to_vec()),
             rssi,
-            raw
+            raw,
         }
     }
 }
@@ -42,7 +42,11 @@ impl Display for Rfid {
         write!(
             f,
             "RSSI: {}, PC: {}, EPC(UID): {:?}, CRC: {}, RAW: {}",
-            self.rssi, self.pc, self.epc, self.crc,bytes_to_hex_upper(&self.raw)
+            self.rssi,
+            self.pc,
+            self.epc,
+            self.crc,
+            bytes_to_hex_upper(&self.raw)
         )
     }
 }
@@ -67,7 +71,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parsing_rfid(){
+    fn test_parsing_rfid() {
         let intake = "BC3000E28069150000501D63E2784FB0B7";
 
         let bytes: Vec<u8> = (0..intake.len())
