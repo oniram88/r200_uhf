@@ -25,6 +25,15 @@ impl Packet {
         data.to_vec()
     }
 
+    /// Check if packet is valid
+    pub fn is_valid(&self) -> bool {
+        // If length is incorrect with wath is sended
+        if 5+2+self.data_len() as usize != self.raw_data.len() {
+            return false;
+        }
+        true
+    }
+
     pub(crate) fn debug(&self) -> String {
         format!(
             "Tipo: {:02X}, Comando: {:02X}, Lunghezza: {} - Dato: {:?}",
@@ -52,7 +61,6 @@ impl Display for Packet {
         write!(f, "{out}")
     }
 }
-
 
 #[cfg(test)]
 mod tests {
