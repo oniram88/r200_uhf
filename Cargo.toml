@@ -8,9 +8,9 @@ repository = "https://github.com/oniram88/r200_uhf"
 
 
 [dependencies]
-log = "0.4.28"
-env_logger = "0.11.8"
-serialport = "4.8.1"
+log = "0.4"
 
-[[example]]
-name = "std_pc_serial"
+[dev-dependencies]
+serialport = "4.8"
+env_logger = "0.11"
+# altre dipendenze usate solo in test/esempi

@@ -2,9 +2,8 @@ use crate::frame::{Command, Frame, R200_FRAME_END, R200_FRAME_HEADER};
 use crate::packet::Packet;
 use crate::rfid::Rfid;
 use log::{debug, error, info};
-use serialport::SerialPort;
 use std::fmt;
-use std::io;
+use std::io::{self, Read, Write};
 
 #[derive(Debug)]
 pub enum WorkingArea {
@@ -46,11 +45,17 @@ impl From<io::Error> for ConnectorError {
     }
 }
 
-pub struct Connector {
-    port: Box<dyn SerialPort>,
+pub struct Connector<P>
+where
+    P: Read + Write
+{
+    port: P,
 }
 
-impl Connector {
+impl<P> Connector<P>
+where
+    P: Read + Write
+{
     /// Create a new Connector from an already opened SerialPort.
     ///
     /// Parameters
@@ -58,7 +63,7 @@ impl Connector {
     ///
     /// Returns
     /// A Connector instance bound to the given serial port.
-    pub fn new(p0: Box<dyn SerialPort>) -> Self {
+    pub fn new(p0: P) -> Self {
         Connector { port: p0 }
     }
 
@@ -510,87 +515,6 @@ mod tests {
             Ok(buf.len())
         }
         fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl SerialPort for MockSerialPort {
-        fn name(&self) -> Option<String> {
-            Some("mock".into())
-        }
-        fn baud_rate(&self) -> serialport::Result<u32> {
-            Ok(115200)
-        }
-        fn data_bits(&self) -> serialport::Result<DataBits> {
-            Ok(DataBits::Eight)
-        }
-        fn flow_control(&self) -> serialport::Result<FlowControl> {
-            Ok(FlowControl::None)
-        }
-        fn parity(&self) -> serialport::Result<Parity> {
-            Ok(Parity::None)
-        }
-        fn stop_bits(&self) -> serialport::Result<StopBits> {
-            Ok(StopBits::One)
-        }
-        fn timeout(&self) -> Duration {
-            self.state.lock().unwrap().timeout
-        }
-        fn set_baud_rate(&mut self, _baud_rate: u32) -> serialport::Result<()> {
-            Ok(())
-        }
-        fn set_data_bits(&mut self, _data_bits: DataBits) -> serialport::Result<()> {
-            Ok(())
-        }
-        fn set_flow_control(&mut self, _flow_control: FlowControl) -> serialport::Result<()> {
-            Ok(())
-        }
-        fn set_parity(&mut self, _parity: Parity) -> serialport::Result<()> {
-            Ok(())
-        }
-        fn set_stop_bits(&mut self, _stop_bits: StopBits) -> serialport::Result<()> {
-            Ok(())
-        }
-        fn set_timeout(&mut self, timeout: Duration) -> serialport::Result<()> {
-            self.state.lock().unwrap().timeout = timeout;
-            Ok(())
-        }
-        fn write_request_to_send(&mut self, _level: bool) -> serialport::Result<()> {
-            Ok(())
-        }
-        fn write_data_terminal_ready(&mut self, _level: bool) -> serialport::Result<()> {
-            Ok(())
-        }
-        fn read_clear_to_send(&mut self) -> serialport::Result<bool> {
-            Ok(true)
-        }
-        fn read_data_set_ready(&mut self) -> serialport::Result<bool> {
-            Ok(true)
-        }
-        fn read_ring_indicator(&mut self) -> serialport::Result<bool> {
-            Ok(false)
-        }
-        fn read_carrier_detect(&mut self) -> serialport::Result<bool> {
-            Ok(true)
-        }
-        fn bytes_to_read(&self) -> serialport::Result<u32> {
-            Ok(0)
-        }
-        fn bytes_to_write(&self) -> serialport::Result<u32> {
-            Ok(0)
-        }
-        fn clear(&self, _buffer_to_clear: ClearBuffer) -> serialport::Result<()> {
-            Ok(())
-        }
-        fn try_clone(&self) -> serialport::Result<Box<dyn SerialPort>> {
-            Ok(Box::new(MockSerialPort {
-                state: self.state.clone(),
-            }))
-        }
-        fn set_break(&self) -> serialport::Result<()> {
-            Ok(())
-        }
-        fn clear_break(&self) -> serialport::Result<()> {
             Ok(())
         }
     }
