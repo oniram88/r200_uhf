@@ -47,14 +47,14 @@ impl From<io::Error> for ConnectorError {
 
 pub struct Connector<P>
 where
-    P: Read + Write
+    P: Read + Write,
 {
     port: P,
 }
 
 impl<P> Connector<P>
 where
-    P: Read + Write
+    P: Read + Write,
 {
     /// Create a new Connector from an already opened SerialPort.
     ///

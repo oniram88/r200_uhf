@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## 0.4.0 - 2025-11-15
+#### Features
+- Remove serialport crate dependency - (3f73c9f) - Marino Bonetti
+
+- - -
+
 ## 0.3.0 - 2025-10-25
 #### Bug Fixes
 - Handle failed power setting with detailed error message - (7eef91c) - Marino Bonetti
