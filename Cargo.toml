@@ -9,8 +9,6 @@ repository = "https://github.com/oniram88/r200_uhf"
 
 [dependencies]
 log = "0.4"
-# altre dipendenze della LIBRERIA qui
-# (serialport NON deve stare qui)
 
 [dev-dependencies]
 serialport = "4.8"
