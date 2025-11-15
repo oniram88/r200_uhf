@@ -4,7 +4,6 @@ use std::collections::HashSet;
 use std::env;
 use std::fmt;
 use std::io::Write;
-use std::thread::sleep;
 use std::time::Duration;
 
 #[derive(Debug)]
