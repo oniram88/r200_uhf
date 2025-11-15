@@ -12,7 +12,8 @@
 ### Add dependency:
 ```toml
 [dependencies]
-r200_uhf = "0.2"
+r200_uhf = "0.3"
+serialport = "4.8"
 ```
 
 ## Run the example (quick start)
@@ -33,6 +34,7 @@ Minimal usage example (library)
 ```rust
 use r200_uhf::Connector;
 use std::time::Duration;
+use serialport;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Open the serial port to the R200 module

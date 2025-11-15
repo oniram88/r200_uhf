@@ -2,9 +2,8 @@ use crate::frame::{Command, Frame, R200_FRAME_END, R200_FRAME_HEADER};
 use crate::packet::Packet;
 use crate::rfid::Rfid;
 use log::{debug, error, info};
-use serialport::SerialPort;
 use std::fmt;
-use std::io;
+use std::io::{self, Read, Write};
 
 #[derive(Debug)]
 pub enum WorkingArea {
@@ -46,11 +45,17 @@ impl From<io::Error> for ConnectorError {
     }
 }
 
-pub struct Connector {
-    port: Box<dyn SerialPort>,
+pub struct Connector<P>
+where
+    P: Read + Write
+{
+    port: P,
 }
 
-impl Connector {
+impl<P> Connector<P>
+where
+    P: Read + Write
+{
     /// Create a new Connector from an already opened SerialPort.
     ///
     /// Parameters
@@ -58,7 +63,7 @@ impl Connector {
     ///
     /// Returns
     /// A Connector instance bound to the given serial port.
-    pub fn new(p0: Box<dyn SerialPort>) -> Self {
+    pub fn new(p0: P) -> Self {
         Connector { port: p0 }
     }
 
