@@ -22,7 +22,7 @@ pub enum ConnectorError {
     NoPacketReceived,
     FailedSetting(String),
     SerialRead(String),
-    ErrorStopMultiPolling
+    ErrorStopMultiPolling(String)
 }
 
 impl fmt::Display for ConnectorError {
@@ -34,7 +34,7 @@ impl fmt::Display for ConnectorError {
             ConnectorError::NoPacketReceived => write!(f, "No packet received"),
             ConnectorError::SerialRead(msg) => write!(f, "Serial read error: {}", msg),
             ConnectorError::FailedSetting(msg) => write!(f, "Failed Setting: {}", msg),
-            ConnectorError::ErrorStopMultiPolling => write!(f, "Impossible to stop multiple polling"),
+            ConnectorError::ErrorStopMultiPolling(msg) => write!(f, "Impossible to stop multiple polling [{msg}]"),
         }
     }
 }
@@ -350,17 +350,20 @@ where
     ) -> Result<(), ConnectorError> {
         self.send_packet(Command::MultiplePollingInstruction(pool_times))
     }
+
+    // Stop Multi: AA 00 28 00 00 28 DD
     pub fn stop_multiple_polling_instructions(&mut self) -> Result<(), ConnectorError> {
         self.send_packet(Command::StopMultiplePollingInstruction)?;
         if let Some(p) =  self.single_read_from_serial()? {
             if matches!(p.command(), Ok(Command::StopMultiplePollingInstruction)) {
                 return Ok(())
+            }else{
+                return Err(ConnectorError::ErrorStopMultiPolling("Wrong response from device".into()));
             }
         }
-        Err(ConnectorError::ErrorStopMultiPolling)
+        Err(ConnectorError::ErrorStopMultiPolling("Generic comunication error".into()))
     }
 
-    // Stop Multi: AA 00 28 00 00 28 DD
 }
 
 fn hexdump_line(prefix: &str, data: &[u8]) {
