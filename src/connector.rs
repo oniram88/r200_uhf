@@ -338,7 +338,6 @@ where
     pub fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
         self.send_packet(Command::MultiplePollingInstruction(100))?;
         let response = self.read_from_serial(Some(100))?;
-        self.stop_multiple_polling_instructions()?;
         self.parse_rfid_packets(response)
     }
 
