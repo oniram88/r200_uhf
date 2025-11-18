@@ -319,7 +319,6 @@ where
         if ps.len() == 1 && ps[0].get_data()[0] == 0x15 {
             debug!("Nessun tag presente in memoria");
         } else {
-            info!("Pacchetti ricevuti: {}", ps.len());
             for p in ps.iter() {
                 let data = p.get_data();
                 debug!("Lettura RFID Data: {:?}", data);
