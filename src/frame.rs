@@ -125,7 +125,7 @@ impl SerializableCommand for Command {
             (0xAA, _) => Ok(Command::GetWorkingChannel),
             (0x08, _) => Ok(Command::GetWorkingArea),
             (0xB7, _) => Ok(Command::AcquireTransmitPower),
-            (0x28,_) => Ok(Command::StopMultiplePollingInstruction),
+            (0x28, _) => Ok(Command::StopMultiplePollingInstruction),
             _ => Err(FrameError::InvalidCommand(format!(
                 "Invalid command code: {}",
                 tuple.0[0]
