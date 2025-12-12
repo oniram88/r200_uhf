@@ -81,9 +81,9 @@ where
 
         let out = format!(
             "Hardware: {} - Software: {} - Manufacturer: {}",
-            hardware?.unwrap().to_string(),
-            software?.unwrap().to_string(),
-            manufacture?.unwrap().to_string()
+            clear_non_ascii(hardware?.unwrap().to_string().as_str()),
+            clear_non_ascii(software?.unwrap().to_string().as_str()),
+            clear_non_ascii(manufacture?.unwrap().to_string().as_str())
         );
 
         Ok(out)
@@ -377,6 +377,12 @@ fn hexdump_line(prefix: &str, data: &[u8]) {
     debug!("{}", out);
 }
 
+fn clear_non_ascii(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii())
+        .collect::<String>()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,5 +649,36 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].get_data(), vec![2]);
         assert_eq!(out[1].get_data(), vec![7]);
+    }
+
+    // ---- clear_non_ascii tests ----
+
+    #[test]
+    fn test_clear_non_ascii_ascii_only() {
+        let s = "Hello, World! 123";
+        let out = clear_non_ascii(s);
+        assert_eq!(out, s);
+    }
+
+    #[test]
+    fn test_clear_non_ascii_removes_non_ascii() {
+        // Mixed ASCII + non-ASCII (Euro sign, CJK, and 'ç')
+        let s = "a€b測cçd";
+        let out = clear_non_ascii(s);
+        assert_eq!(out, "abcd");
+    }
+
+    #[test]
+    fn test_clear_non_ascii_keeps_ascii_control_chars() {
+        let s = "A\nB\tC\r\x07"; // includes newline, tab, carriage return, BEL
+        let out = clear_non_ascii(s);
+        assert_eq!(out, s);
+    }
+
+    #[test]
+    fn test_clear_non_ascii_empty_input() {
+        let s = "";
+        let out = clear_non_ascii(s);
+        assert_eq!(out, "");
     }
 }
