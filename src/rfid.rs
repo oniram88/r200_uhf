@@ -1,6 +1,7 @@
 use std::fmt::Display;
 use std::hash::Hash;
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone)]
 pub struct Rfid {
     pub rssi: u8,

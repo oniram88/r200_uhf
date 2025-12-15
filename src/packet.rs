@@ -2,6 +2,7 @@ use crate::frame::SerializableCommand;
 use crate::frame::{Command, FrameError};
 use std::fmt::Display;
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Packet {
     raw_data: Vec<u8>,
 }
