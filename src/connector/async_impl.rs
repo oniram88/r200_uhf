@@ -1,5 +1,6 @@
+use std::time::Duration;
 use async_trait::async_trait;
-use crate::connector::{clear_non_ascii, hexdump_line, Connector, ConnectorError, WorkingArea};
+use crate::connector::{calculate_transmit_power, clear_non_ascii, hexdump_line, Connector, ConnectorError, WorkingArea};
 use crate::frame::{Command, Frame, R200_FRAME_END, R200_FRAME_HEADER};
 use crate::packet::Packet;
 use crate::rfid::Rfid;
@@ -95,7 +96,7 @@ where
             let read_future = self.port.read(&mut read_buf);
             
             // In a real async scenario with timeout, we might use tokio::time::timeout
-            let raw_data_size = match tokio::time::timeout(std::time::Duration::from_millis(500), read_future).await {
+            let raw_data_size = match tokio::time::timeout(Duration::from_millis(500), read_future).await {
                 Ok(res) => res,
                 Err(_) => {
                     if output.is_empty() {
@@ -150,14 +151,7 @@ where
     async fn get_working_area(&mut self) -> Result<WorkingArea, ConnectorError> {
         self.send_packet(Command::GetWorkingArea).await?;
         if let Some(p) = self.single_read_from_serial().await? {
-            return match p.get_data()[0] {
-                0 => Ok(WorkingArea::China900Mhz),
-                1 => Ok(WorkingArea::China800Mhz),
-                2 => Ok(WorkingArea::US),
-                3 => Ok(WorkingArea::EU),
-                4 => Ok(WorkingArea::Korea),
-                _ => Err(ConnectorError::InvalidWorkingArea),
-            };
+            return Connector::<S>::parse_to_working_area(p)
         }
         Err(ConnectorError::NoPacketReceived)
     }
@@ -165,13 +159,7 @@ where
     async fn get_working_channel(&mut self) -> Result<f64, ConnectorError> {
         self.send_packet(Command::GetWorkingChannel).await?;
         if let Some(p) = self.single_read_from_serial().await? {
-            match self.get_working_area().await? {
-                WorkingArea::China900Mhz => return Ok((p.get_data()[0] as f64) * 0.25 + 920.125),
-                WorkingArea::China800Mhz => return Ok((p.get_data()[0] as f64) * 0.25 + 840.125),
-                WorkingArea::US => return Ok((p.get_data()[0] as f64) * 0.50 + 902.25),
-                WorkingArea::EU => return Ok((p.get_data()[0] as f64) * 0.2 + 865.1),
-                WorkingArea::Korea => return Ok((p.get_data()[0] as f64) * 0.2 + 917.1),
-            }
+            return Ok(self.get_working_area().await?.packet_to_64(p));
         }
         Err(ConnectorError::NoPacketReceived)
     }
@@ -179,8 +167,7 @@ where
     async fn get_transmit_power(&mut self) -> Result<f64, ConnectorError> {
         self.send_packet(Command::AcquireTransmitPower).await?;
         if let Some(p) = self.single_read_from_serial().await? {
-            let data = p.get_data();
-            return Ok(((data[0] as u16) * 256 + (data[1] as u16)) as f64 / 100.0);
+            return Ok(calculate_transmit_power(p));
         }
         Err(ConnectorError::NoPacketReceived)
     }

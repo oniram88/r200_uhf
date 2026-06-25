@@ -1,4 +1,4 @@
-use crate::connector::{clear_non_ascii, hexdump_line, Connector, ConnectorError, WorkingArea};
+use crate::connector::{calculate_transmit_power, clear_non_ascii, hexdump_line, Connector, ConnectorError, WorkingArea};
 use crate::frame::{Command, Frame, R200_FRAME_END, R200_FRAME_HEADER};
 use crate::packet::Packet;
 use crate::rfid::Rfid;
@@ -84,8 +84,6 @@ where
 
     /// Setup the reader with default settings (inspired by e710_uhf)
     fn setup_reader(&mut self) -> Result<(), ConnectorError> {
-        // Here we could add initialization logic if needed, 
-        // for now just stop any existing multi polling
         self.stop_multiple_polling_instructions().ok();
         Ok(())
     }
@@ -222,14 +220,7 @@ where
         self.send_packet(Command::GetWorkingArea)?;
         let p = self.single_read_from_serial()?;
         if let Some(p) = p {
-            return match p.get_data()[0] {
-                0 => Ok(WorkingArea::China900Mhz),
-                1 => Ok(WorkingArea::China800Mhz),
-                2 => Ok(WorkingArea::US),
-                3 => Ok(WorkingArea::EU),
-                4 => Ok(WorkingArea::Korea),
-                _ => Err(ConnectorError::InvalidWorkingArea),
-            };
+            return Connector::<S>::parse_to_working_area(p)
         }
         Err(ConnectorError::NoPacketReceived)
     }
@@ -247,23 +238,7 @@ where
         self.send_packet(Command::GetWorkingChannel)?;
         let p = self.single_read_from_serial()?;
         if let Some(p) = p {
-            match self.get_working_area()? {
-                WorkingArea::China900Mhz => {
-                    return Ok((p.get_data()[0] as f64) * 0.25 + 920.125);
-                }
-                WorkingArea::China800Mhz => {
-                    return Ok((p.get_data()[0] as f64) * 0.25 + 840.125);
-                }
-                WorkingArea::US => {
-                    return Ok((p.get_data()[0] as f64) * 0.50 + 902.25);
-                }
-                WorkingArea::EU => {
-                    return Ok((p.get_data()[0] as f64) * 0.2 + 865.1);
-                }
-                WorkingArea::Korea => {
-                    return Ok((p.get_data()[0] as f64) * 0.2 + 917.1);
-                }
-            }
+            return Ok(self.get_working_area()?.packet_to_64(p));
         }
         Err(ConnectorError::NoPacketReceived)
     }
@@ -281,8 +256,7 @@ where
         self.send_packet(Command::AcquireTransmitPower)?;
         let p = self.single_read_from_serial()?;
         if let Some(p) = p {
-            let data = p.get_data();
-            return Ok(((data[0] as u16) * 16 * 16 + (data[1] as u16)) as f64 / 100.0);
+            return Ok(calculate_transmit_power(p));
         }
         Err(ConnectorError::NoPacketReceived)
     }
