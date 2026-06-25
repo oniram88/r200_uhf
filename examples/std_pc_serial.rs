@@ -65,7 +65,7 @@ fn main() -> Result<(), AppError> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         warn!(
-            "Usage: {} <serial-port> [baud]\nExample: {} /dev/ttyUSB0 115200",
+            "Usage: {} <serial-port> [baud [power]]\nExample: {} /dev/ttyUSB0 115200",
             args[0], args[0]
         );
         std::process::exit(1);
@@ -77,6 +77,13 @@ fn main() -> Result<(), AppError> {
             .map_err(|_| AppError::Parse("Invalid baud rate".to_string()))?
     } else {
         115200
+    };
+    let power: f64 = if args.len() == 4 {
+        args[3]
+            .parse()
+            .map_err(|_| AppError::Parse("Invalid power 15 -> 23.6".to_string()))?
+    } else {
+        POWER_TRANSMISSION
     };
 
     info!("Opening port {} at {} baud...", port_name, baud);
@@ -116,11 +123,11 @@ fn main() -> Result<(), AppError> {
         .get_transmit_power()
         .map_err(|e| AppError::Connector(e.to_string()))?;
     info!("Trasmissione power {:?}", trasmission_power);
-    if trasmission_power != POWER_TRANSMISSION {
+    if trasmission_power != power {
         info!(
             "Set trasmission power {:?}",
             connector
-                .set_trasmission_power(POWER_TRANSMISSION)
+                .set_trasmission_power(power)
                 .map_err(|e| AppError::Connector(e.to_string()))?
         );
     }
