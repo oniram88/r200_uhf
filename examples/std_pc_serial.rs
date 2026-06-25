@@ -1,9 +1,10 @@
-use log::{Level, LevelFilter, info, warn};
+use log::{Level, LevelFilter, info, warn, error};
 use r200_uhf::{Connector, Rfid};
 use std::collections::HashSet;
 use std::env;
 use std::fmt;
 use std::io::Write;
+use std::thread::sleep;
 use std::time::Duration;
 
 #[derive(Debug)]
@@ -97,7 +98,14 @@ fn main() -> Result<(), AppError> {
 
     // It's possible that the device was not correct terminated and the multiple polling instruction
     // is enabled. Send a stop.
-    connector.stop_multiple_polling_instructions().unwrap();
+   loop {
+       if  connector.stop_multiple_polling_instructions().is_err() {
+           error!("FAIL: Connector stop multiple polling");
+           sleep(Duration::from_millis(500));
+       }else{
+           break;
+       }
+   }
 
     info!(
         "{}",
