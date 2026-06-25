@@ -23,11 +23,11 @@ impl Display for FrameError {
 
 impl std::error::Error for FrameError {}
 
-pub(crate) enum Command {
+pub enum Command {
     GetWorkingChannel,
     GetWorkingArea,
     AcquireTransmitPower,
-    SetTrasmissionPower(f64),
+    SetTransmissionPower(f64),
     HardwareVersion,
     SoftwareVersion,
     Manufacturer,
@@ -45,7 +45,7 @@ impl Display for Command {
             Command::GetWorkingChannel => write!(f, "Get Working Channel"),
             Command::GetWorkingArea => write!(f, "Get Working Area"),
             Command::AcquireTransmitPower => write!(f, "Acquire transmit power"),
-            Command::SetTrasmissionPower(power) => write!(f, "Set transmission power to {}", power),
+            Command::SetTransmissionPower(power) => write!(f, "Set transmission power to {}", power),
             Command::SinglePollingInstruction => write!(f, "Single Polling Instruction"),
             Command::MultiplePollingInstruction(max) => {
                 write!(f, "Multiple Polling Instruction [max: {max} times]")
@@ -89,7 +89,7 @@ impl SerializableCommand for Command {
             Command::GetWorkingChannel => (vec![0xAA], vec![]),
             Command::GetWorkingArea => (vec![0x08], vec![]),
             Command::AcquireTransmitPower => (vec![0xB7], vec![]),
-            Command::SetTrasmissionPower(p) => {
+            Command::SetTransmissionPower(p) => {
                 let power = (p * 100.0) as u16;
                 let mut v = Vec::new();
                 v.push((power >> 8) as u8);
@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn set_transmission_power_frame_bytes() {
         // 26.50 dBm -> 2650 -> 0x0A 0x5A
-        let bytes = frame_bytes(Command::SetTrasmissionPower(26.50));
+        let bytes = frame_bytes(Command::SetTransmissionPower(26.50));
         let expected = vec![0xAA, 0x00, 0xB6, 0x00, 0x02, 0x0A, 0x5A, 0x1C, 0xDD];
         assert_eq!(bytes, expected);
     }
@@ -246,7 +246,7 @@ mod tests {
             (vec![0xB7], vec![])
         );
 
-        let (cmd, params) = Command::SetTrasmissionPower(26.5).to_bytes();
+        let (cmd, params) = Command::SetTransmissionPower(26.5).to_bytes();
         assert_eq!(cmd, vec![0xB6]);
         assert_eq!(params, vec![0x0A, 0x5A]); // 26.5 dBm -> 2650 -> 0x0A 0x5A
 

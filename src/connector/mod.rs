@@ -1,15 +1,27 @@
-#[cfg(feature = "async")]
-pub mod async_impl;
-#[cfg(feature = "sync")]
 pub mod sync;
 
 #[cfg(feature = "async")]
-pub use async_impl::Connector as AsyncConnector;
-#[cfg(feature = "sync")]
-pub use sync::Connector;
+mod async_impl;
+
+#[cfg(feature = "async")]
+pub use async_impl::*;
 
 use std::fmt;
 use std::io;
+
+pub struct Connector<P>
+{
+    port: P,
+}
+
+impl<P> Connector<P>{
+    /// Create a new Connector from an already opened SerialPort.
+    pub fn new(port: P) -> Self {
+        Connector { port }
+    }
+}
+
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

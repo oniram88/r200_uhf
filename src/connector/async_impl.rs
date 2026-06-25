@@ -1,31 +1,48 @@
-use crate::connector::{clear_non_ascii, hexdump_line, ConnectorError, WorkingArea};
+use async_trait::async_trait;
+use crate::connector::{clear_non_ascii, hexdump_line, Connector, ConnectorError, WorkingArea};
 use crate::frame::{Command, Frame, R200_FRAME_END, R200_FRAME_HEADER};
 use crate::packet::Packet;
 use crate::rfid::Rfid;
 use log::{debug, info};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub struct Connector<P>
-where
-    P: AsyncRead + AsyncWrite + Unpin,
-{
-    port: P,
+#[async_trait]
+pub trait AsyncIO {
+    type Socket: AsyncRead + AsyncWrite + Unpin + Send;
+    async fn setup_reader(&mut self) -> Result<(), ConnectorError>;
+    async fn get_module_info(&mut self) -> Result<String, ConnectorError>;
+    async fn send_packet(&mut self, command: Command) -> Result<(), ConnectorError>;
+    async fn single_read_from_serial(&mut self) -> Result<Option<Packet>, ConnectorError>;
+    async fn read_from_serial(
+        &mut self,
+        num_expected_responses: Option<u32>,
+    ) -> Result<Option<Vec<Packet>>, ConnectorError>;
+    async fn get_working_area(&mut self) -> Result<WorkingArea, ConnectorError>;
+    async fn get_working_channel(&mut self) -> Result<f64, ConnectorError>;
+    async fn get_transmit_power(&mut self) -> Result<f64, ConnectorError>;
+    async fn set_transmission_power(&mut self, power: f64) -> Result<(), ConnectorError>;
+    async fn single_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError>;
+    fn parse_rfid_packets(
+        &self,
+        response: Option<Vec<Packet>>,
+    ) -> Result<Vec<Rfid>, ConnectorError>;
+    async fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError>;
+    async fn stop_multiple_polling_instructions(&mut self) -> Result<(), ConnectorError>;
 }
 
-impl<P> Connector<P>
+#[async_trait]
+impl<S> AsyncIO for Connector<S>
 where
-    P: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    pub fn new(port: P) -> Self {
-        Connector { port }
-    }
+    type Socket = S;
 
-    pub async fn setup_reader(&mut self) -> Result<(), ConnectorError> {
+    async fn setup_reader(&mut self) -> Result<(), ConnectorError> {
         self.stop_multiple_polling_instructions().await.ok();
         Ok(())
     }
 
-    pub async fn get_module_info(&mut self) -> Result<String, ConnectorError> {
+    async fn get_module_info(&mut self) -> Result<String, ConnectorError> {
         self.send_packet(Command::HardwareVersion).await?;
         let hardware = self.single_read_from_serial().await?;
         self.send_packet(Command::SoftwareVersion).await?;
@@ -130,7 +147,7 @@ where
         Ok(Some(output))
     }
 
-    pub async fn get_working_area(&mut self) -> Result<WorkingArea, ConnectorError> {
+    async fn get_working_area(&mut self) -> Result<WorkingArea, ConnectorError> {
         self.send_packet(Command::GetWorkingArea).await?;
         if let Some(p) = self.single_read_from_serial().await? {
             return match p.get_data()[0] {
@@ -145,7 +162,7 @@ where
         Err(ConnectorError::NoPacketReceived)
     }
 
-    pub async fn get_working_channel(&mut self) -> Result<f64, ConnectorError> {
+    async fn get_working_channel(&mut self) -> Result<f64, ConnectorError> {
         self.send_packet(Command::GetWorkingChannel).await?;
         if let Some(p) = self.single_read_from_serial().await? {
             match self.get_working_area().await? {
@@ -159,7 +176,7 @@ where
         Err(ConnectorError::NoPacketReceived)
     }
 
-    pub async fn get_transmit_power(&mut self) -> Result<f64, ConnectorError> {
+    async fn get_transmit_power(&mut self) -> Result<f64, ConnectorError> {
         self.send_packet(Command::AcquireTransmitPower).await?;
         if let Some(p) = self.single_read_from_serial().await? {
             let data = p.get_data();
@@ -168,8 +185,8 @@ where
         Err(ConnectorError::NoPacketReceived)
     }
 
-    pub async fn set_trasmission_power(&mut self, power: f64) -> Result<(), ConnectorError> {
-        self.send_packet(Command::SetTrasmissionPower(power)).await?;
+    async fn set_transmission_power(&mut self, power: f64) -> Result<(), ConnectorError> {
+        self.send_packet(Command::SetTransmissionPower(power)).await?;
         if let Some(p) = self.single_read_from_serial().await? {
             if p.get_data()[0] == 0x00 {
                 info!("Power correctly set to {}", power);
@@ -184,7 +201,7 @@ where
         Err(ConnectorError::NoPacketReceived)
     }
 
-    pub async fn single_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
+    async fn single_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
         self.send_packet(Command::SinglePollingInstruction).await?;
         let response = self.read_from_serial(None).await?;
         self.parse_rfid_packets(response)
@@ -210,13 +227,13 @@ where
         Ok(rfids)
     }
 
-    pub async fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
+    async fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
         self.send_packet(Command::MultiplePollingInstruction(100)).await?;
         let response = self.read_from_serial(Some(100)).await?;
         self.parse_rfid_packets(response)
     }
 
-    pub async fn stop_multiple_polling_instructions(&mut self) -> Result<(), ConnectorError> {
+    async fn stop_multiple_polling_instructions(&mut self) -> Result<(), ConnectorError> {
         self.send_packet(Command::StopMultiplePollingInstruction).await?;
         if let Some(p) = self.single_read_from_serial().await? {
             if matches!(p.command(), Ok(Command::StopMultiplePollingInstruction)) {

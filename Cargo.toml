@@ -13,15 +13,21 @@ serde = { version = "1", features = ["derive"], optional = true }
 async-trait = { version = "0.1", optional = true }
 tokio = { version = "1", features = ["io-util", "time"], optional = true }
 futures = { version = "0.3", optional = true }
+async-stream = { version = "0.3", optional = true }
+
+[features]
+default = []
+# Abilita la serializzazione/deserializzazione Serde delle strutture quando richiesto
+serde = ["dep:serde"]
+async = ["async-trait", "tokio", "futures", "async-stream"]
+
 
 [dev-dependencies]
 serialport = "4.8"
 env_logger = "0.11"
-tokio = { version = "1", features = ["full"] }
+tokio-serial = "5.4.5"
+## Tokio serve per compilare/girare gli esempi async che usano #[tokio::main]
+## Qui abilitiamo le feature necessarie al runtime e alle macro, senza
+## richiedere l'attivazione della feature opzionale della libreria.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util"] }
 
-[features]
-default = ["sync"]
-# Abilita la serializzazione/deserializzazione Serde delle strutture quando richiesto
-serde = ["dep:serde"]
-sync = []
-async = ["dep:async-trait", "dep:tokio", "dep:futures"]

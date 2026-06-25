@@ -1,35 +1,96 @@
-use crate::connector::{clear_non_ascii, hexdump_line, ConnectorError, WorkingArea};
+use crate::connector::{clear_non_ascii, hexdump_line, Connector, ConnectorError, WorkingArea};
 use crate::frame::{Command, Frame, R200_FRAME_END, R200_FRAME_HEADER};
 use crate::packet::Packet;
 use crate::rfid::Rfid;
 use log::{debug, error, info};
 use std::io::{self, Read, Write};
 
-pub struct Connector<P>
-where
-    P: Read + Write,
-{
-    port: P,
+pub trait SyncIO {
+    type Socket: Read + Write;
+    /// Setup the reader with default settings (inspired by e710_uhf)
+    fn setup_reader(&mut self) -> Result<(), ConnectorError>;
+    fn get_module_info(&mut self) -> Result<String, ConnectorError>;
+    /// Builds and sends the command
+    fn send_packet(&mut self, command: Command) -> Result<(), ConnectorError>;
+    fn single_read_from_serial(&mut self) -> Result<Option<Packet>, ConnectorError>;
+    fn read_from_serial(
+        &mut self,
+        num_expected_responses: Option<u32>,
+    ) -> Result<Option<Vec<Packet>>, ConnectorError>;
+    /// Get the current regulatory working area configured on the device.
+    ///
+    /// Returns
+    /// - Ok(WorkingArea) with the region inferred from the device response.
+    /// - Err(ConnectorError::InvalidWorkingArea) if the response contains an unknown code.
+    /// - Err(ConnectorError::NoPacketReceived) if nothing is received.
+    /// - Other ConnectorError variants on I/O failure or timeout.
+    fn get_working_area(&mut self) -> Result<WorkingArea, ConnectorError>;
+    /// Get the current working RF channel as a frequency in MHz.
+    ///
+    /// The raw channel index returned by the device is converted to MHz based on
+    /// the configured WorkingArea. Different regions use different spacing and base frequencies.
+    ///
+    /// Returns
+    /// - Ok(f64) with the center frequency in MHz.
+    /// - Err(ConnectorError::NoPacketReceived) if no response is obtained.
+    /// - Other ConnectorError variants on I/O failure, timeout, or unknown working area.
+    fn get_working_channel(&mut self) -> Result<f64, ConnectorError>;
+    /// Read the current transmit power reported by the device.
+    ///
+    /// The device returns two bytes that represent the power value scaled by 100.
+    /// This method combines them and returns the value as f64.
+    ///
+    /// Returns
+    /// - Ok(f64) with the transmit power (device-specific units, typically dBm).
+    /// - Err(ConnectorError::NoPacketReceived) if no response is obtained.
+    /// - Other ConnectorError variants on I/O failure or timeout.
+    fn get_transmit_power(&mut self) -> Result<f64, ConnectorError>;
+    /// Set the transmitter output power.
+    ///
+    /// Parameters
+    /// - power: Desired transmit power in device-specific units (typically dBm).
+    ///
+    /// Returns
+    /// - Ok(()) when the device acknowledges the setting.
+    /// - Err(ConnectorError::NoPacketReceived) if no response is obtained.
+    /// - Other ConnectorError variants on I/O failure or timeout.
+    fn set_transmission_power(&mut self, power: f64) -> Result<(), ConnectorError>;
+    /// Perform a single inventory (poll) and return the list of detected tags.
+    ///
+    /// Sends a SinglePollingInstruction to the reader and parses all returned packets
+    /// into a collection of Rfid records containing RSSI, PC, EPC (UID) and CRC.
+    ///
+    /// Returns
+    /// - Ok(Vec<Rfid>) possibly empty if no tags are present.
+    /// - Err(ConnectorError::Timeout or other) on communication errors.
+    fn single_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError>;
+    fn parse_rfid_packets(
+        &mut self,
+        response: Option<Vec<Packet>>,
+    ) -> Result<Vec<Rfid>, ConnectorError>;
+    fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError>; // Start Multi: AA 00 27 00 03 22 FF FF 4A DD
+    fn enable_multiple_polling_instructions(
+        &mut self,
+        pool_times: u16,
+    ) -> Result<(), ConnectorError>; // Stop Multi: AA 00 28 00 00 28 DD
+    fn stop_multiple_polling_instructions(&mut self) -> Result<(), ConnectorError>;
 }
 
-impl<P> Connector<P>
+impl<S> SyncIO for Connector<S>
 where
-    P: Read + Write,
+    S: Read + Write,
 {
-    /// Create a new Connector from an already opened SerialPort.
-    pub fn new(port: P) -> Self {
-        Connector { port }
-    }
+    type Socket = S;
 
     /// Setup the reader with default settings (inspired by e710_uhf)
-    pub fn setup_reader(&mut self) -> Result<(), ConnectorError> {
+    fn setup_reader(&mut self) -> Result<(), ConnectorError> {
         // Here we could add initialization logic if needed, 
         // for now just stop any existing multi polling
         self.stop_multiple_polling_instructions().ok();
         Ok(())
     }
 
-    pub fn get_module_info(&mut self) -> Result<String, ConnectorError> {
+    fn get_module_info(&mut self) -> Result<String, ConnectorError> {
         self.send_packet(Command::HardwareVersion)?;
         let hardware = self.single_read_from_serial();
         self.send_packet(Command::SoftwareVersion)?;
@@ -157,7 +218,7 @@ where
     /// - Err(ConnectorError::InvalidWorkingArea) if the response contains an unknown code.
     /// - Err(ConnectorError::NoPacketReceived) if nothing is received.
     /// - Other ConnectorError variants on I/O failure or timeout.
-    pub fn get_working_area(&mut self) -> Result<WorkingArea, ConnectorError> {
+    fn get_working_area(&mut self) -> Result<WorkingArea, ConnectorError> {
         self.send_packet(Command::GetWorkingArea)?;
         let p = self.single_read_from_serial()?;
         if let Some(p) = p {
@@ -182,7 +243,7 @@ where
     /// - Ok(f64) with the center frequency in MHz.
     /// - Err(ConnectorError::NoPacketReceived) if no response is obtained.
     /// - Other ConnectorError variants on I/O failure, timeout, or unknown working area.
-    pub fn get_working_channel(&mut self) -> Result<f64, ConnectorError> {
+    fn get_working_channel(&mut self) -> Result<f64, ConnectorError> {
         self.send_packet(Command::GetWorkingChannel)?;
         let p = self.single_read_from_serial()?;
         if let Some(p) = p {
@@ -216,7 +277,7 @@ where
     /// - Ok(f64) with the transmit power (device-specific units, typically dBm).
     /// - Err(ConnectorError::NoPacketReceived) if no response is obtained.
     /// - Other ConnectorError variants on I/O failure or timeout.
-    pub fn get_transmit_power(&mut self) -> Result<f64, ConnectorError> {
+    fn get_transmit_power(&mut self) -> Result<f64, ConnectorError> {
         self.send_packet(Command::AcquireTransmitPower)?;
         let p = self.single_read_from_serial()?;
         if let Some(p) = p {
@@ -235,8 +296,8 @@ where
     /// - Ok(()) when the device acknowledges the setting.
     /// - Err(ConnectorError::NoPacketReceived) if no response is obtained.
     /// - Other ConnectorError variants on I/O failure or timeout.
-    pub fn set_trasmission_power(&mut self, power: f64) -> Result<(), ConnectorError> {
-        self.send_packet(Command::SetTrasmissionPower(power))?;
+    fn set_transmission_power(&mut self, power: f64) -> Result<(), ConnectorError> {
+        self.send_packet(Command::SetTransmissionPower(power))?;
         let p = self.single_read_from_serial()?;
         if let Some(p) = p {
             let data = p.get_data();
@@ -262,7 +323,7 @@ where
     /// Returns
     /// - Ok(Vec<Rfid>) possibly empty if no tags are present.
     /// - Err(ConnectorError::Timeout or other) on communication errors.
-    pub fn single_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
+    fn single_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
         self.send_packet(Command::SinglePollingInstruction)?;
         let response = self.read_from_serial(None)?;
         self.parse_rfid_packets(response)
@@ -295,14 +356,14 @@ where
         Ok(rfids)
     }
 
-    pub fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
+    fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
         self.send_packet(Command::MultiplePollingInstruction(100))?;
         let response = self.read_from_serial(Some(100))?;
         self.parse_rfid_packets(response)
     }
 
     // Start Multi: AA 00 27 00 03 22 FF FF 4A DD
-    pub fn enable_multiple_polling_instructions(
+    fn enable_multiple_polling_instructions(
         &mut self,
         pool_times: u16,
     ) -> Result<(), ConnectorError> {
@@ -310,7 +371,7 @@ where
     }
 
     // Stop Multi: AA 00 28 00 00 28 DD
-    pub fn stop_multiple_polling_instructions(&mut self) -> Result<(), ConnectorError> {
+    fn stop_multiple_polling_instructions(&mut self) -> Result<(), ConnectorError> {
         self.send_packet(Command::StopMultiplePollingInstruction)?;
         if let Some(p) = self.single_read_from_serial()? {
             if matches!(p.command(), Ok(Command::StopMultiplePollingInstruction)) {
@@ -535,7 +596,7 @@ mod tests {
         let frame = make_frame(0xB6, Some(vec![0x07, 0xD0]), &[0x00]);
         let mock = MockSerialPort::new(vec![frame]);
         let mut connector = Connector::new(mock);
-        connector.set_trasmission_power(20.0).unwrap();
+        connector.set_transmission_power(20.0).unwrap();
     }
 
     #[test]
