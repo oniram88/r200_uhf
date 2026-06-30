@@ -23,10 +23,6 @@ pub trait AsyncIO {
     async fn get_transmit_power(&mut self) -> Result<f64, ConnectorError>;
     async fn set_transmission_power(&mut self, power: f64) -> Result<(), ConnectorError>;
     async fn single_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError>;
-    fn parse_rfid_packets(
-        &self,
-        response: Option<Vec<Packet>>,
-    ) -> Result<Vec<Rfid>, ConnectorError>;
     async fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError>;
     async fn stop_multiple_polling_instructions(&mut self) -> Result<(), ConnectorError>;
 }
@@ -174,44 +170,13 @@ where
 
     async fn set_transmission_power(&mut self, power: f64) -> Result<(), ConnectorError> {
         self.send_packet(Command::SetTransmissionPower(power)).await?;
-        if let Some(p) = self.single_read_from_serial().await? {
-            if p.get_data()[0] == 0x00 {
-                info!("Power correctly set to {}", power);
-                return Ok(());
-            } else {
-                return Err(ConnectorError::FailedSetting(format!(
-                    "Failed to set power to {}",
-                    power
-                )));
-            }
-        }
-        Err(ConnectorError::NoPacketReceived)
+        Connector::<S>::_set_transmission_power(self.single_read_from_serial().await?, power)
     }
 
     async fn single_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
         self.send_packet(Command::SinglePollingInstruction).await?;
         let response = self.read_from_serial(None).await?;
         self.parse_rfid_packets(response)
-    }
-
-    fn parse_rfid_packets(
-        &self,
-        response: Option<Vec<Packet>>,
-    ) -> Result<Vec<Rfid>, ConnectorError> {
-        let mut rfids = Vec::new();
-        if let Some(ps) = response {
-            if ps.len() == 1 && ps[0].get_data()[0] == 0x15 {
-                debug!("No tags present");
-            } else {
-                for p in ps {
-                    let data = p.get_data();
-                    if data.len() == 17 {
-                        rfids.push(Rfid::from_raw(data));
-                    }
-                }
-            }
-        }
-        Ok(rfids)
     }
 
     async fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {

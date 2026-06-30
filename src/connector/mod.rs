@@ -7,8 +7,10 @@ mod async_impl;
 pub use async_impl::*;
 
 use crate::packet::Packet;
+use log::{debug, error, info};
 use std::fmt;
 use std::io;
+use crate::Rfid;
 
 pub struct Connector<P> {
     port: P,
@@ -29,6 +31,43 @@ impl<P> Connector<P> {
             4 => Ok(WorkingArea::Korea),
             _ => Err(ConnectorError::InvalidWorkingArea),
         }
+    }
+
+    fn _set_transmission_power(p: Option<Packet>, power: f64) -> Result<(), ConnectorError> {
+        if let Some(p) = p {
+            let data = p.get_data();
+            if data[0] == 0x00 {
+                info!("Power correct set to {}", power);
+                return Ok(());
+            } else {
+                error!("Power not set to {}", power);
+                return Err(ConnectorError::FailedSetting(format!(
+                    "Transmission power not set to {}",
+                    power
+                )));
+            }
+        }
+        Err(ConnectorError::NoPacketReceived)
+    }
+
+    fn parse_rfid_packets(
+        &self,
+        response: Option<Vec<Packet>>,
+    ) -> Result<Vec<Rfid>, ConnectorError> {
+        let mut rfids = Vec::new();
+        if let Some(ps) = response {
+            if ps.len() == 1 && ps[0].get_data()[0] == 0x15 {
+                debug!("No tags present");
+            } else {
+                for p in ps {
+                    let data = p.get_data();
+                    if data.len() == 17 {
+                        rfids.push(Rfid::from_raw(data));
+                    }
+                }
+            }
+        }
+        Ok(rfids)
     }
 }
 
@@ -101,7 +140,7 @@ pub(crate) fn hexdump_line(prefix: &str, data: &[u8]) {
     log::debug!("{} {}", prefix, out);
 }
 
-pub(crate) fn calculate_transmit_power(p:Packet) -> f64{
+pub(crate) fn calculate_transmit_power(p: Packet) -> f64 {
     let data = p.get_data();
     ((data[0] as u16) * 256 + (data[1] as u16)) as f64 / 100.0
 }

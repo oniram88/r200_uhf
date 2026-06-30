@@ -2,7 +2,7 @@ use crate::connector::{calculate_transmit_power, clear_non_ascii, hexdump_line, 
 use crate::frame::{Command, Frame, R200_FRAME_END, R200_FRAME_HEADER};
 use crate::packet::Packet;
 use crate::rfid::Rfid;
-use log::{debug, error, info};
+use log::{debug, error};
 use std::io::{self, Read, Write};
 
 pub trait SyncIO {
@@ -64,10 +64,6 @@ pub trait SyncIO {
     /// - Ok(Vec<Rfid>) possibly empty if no tags are present.
     /// - Err(ConnectorError::Timeout or other) on communication errors.
     fn single_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError>;
-    fn parse_rfid_packets(
-        &mut self,
-        response: Option<Vec<Packet>>,
-    ) -> Result<Vec<Rfid>, ConnectorError>;
     fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError>; // Start Multi: AA 00 27 00 03 22 FF FF 4A DD
     fn enable_multiple_polling_instructions(
         &mut self,
@@ -272,21 +268,7 @@ where
     /// - Other ConnectorError variants on I/O failure or timeout.
     fn set_transmission_power(&mut self, power: f64) -> Result<(), ConnectorError> {
         self.send_packet(Command::SetTransmissionPower(power))?;
-        let p = self.single_read_from_serial()?;
-        if let Some(p) = p {
-            let data = p.get_data();
-            if data[0] == 0x00 {
-                info!("Power correct set to {}", power);
-                return Ok(());
-            } else {
-                error!("Power not set to {}", power);
-                return Err(ConnectorError::FailedSetting(format!(
-                    "Transmission power not set to {}",
-                    power
-                )));
-            }
-        }
-        Err(ConnectorError::NoPacketReceived)
+        Connector::<S>::_set_transmission_power(self.single_read_from_serial()?, power)
     }
 
     /// Perform a single inventory (poll) and return the list of detected tags.
@@ -301,33 +283,6 @@ where
         self.send_packet(Command::SinglePollingInstruction)?;
         let response = self.read_from_serial(None)?;
         self.parse_rfid_packets(response)
-    }
-
-    fn parse_rfid_packets(
-        &mut self,
-        response: Option<Vec<Packet>>,
-    ) -> Result<Vec<Rfid>, ConnectorError> {
-        let mut rfids: Vec<Rfid> = Vec::new();
-
-        let ps = response.unwrap_or(vec![]);
-
-        if ps.len() == 1 && ps[0].get_data()[0] == 0x15 {
-            debug!("Nessun tag presente in memoria");
-        } else {
-            for p in ps.iter() {
-                let data = p.get_data();
-                debug!("Lettura RFID Data: {:?}", data);
-
-                if data.len() != 17 {
-                    // Skip di qualsiasi pacchetto non valido
-                    continue;
-                }
-
-                rfids.push(Rfid::from_raw(data))
-            }
-        }
-
-        Ok(rfids)
     }
 
     fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
