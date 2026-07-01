@@ -2,6 +2,23 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## 0.5.0 - 2026-07-01
+#### Features
+- Add serializable through feature - (fa48a82) - Marino Bonetti
+- Export additional types from connector module - (aaf4272) - Marino Bonetti
+#### Bug Fixes
+- Correzione cargo tests - (4387c1a) - Marino Bonetti
+- Ensure non-ASCII characters are removed from connector output formatting - (5492d13) - Marino Bonetti
+- Improve error handling and formatting for stopping multiple polling - (1f41b96) - Marino Bonetti
+- Remove unecessary stop of starting multiple polling instructions - (cf03d1f) - Marino Bonetti
+- Remove redundant log for received packets - (5a6933c) - Marino Bonetti
+- Add detailed error messages for stop multiple polling failures - (0367972) - Marino Bonetti
+- Correct Check if response to stop multi correct - (71681d0) - Marino Bonetti
+#### Documentation
+- Remove old cog configs - (364b137) - Marino Bonetti
+
+- - -
+
 ## 0.4.0 - 2025-11-15
 #### Features
 - Remove serialport crate dependency - (3f73c9f) - Marino Bonetti

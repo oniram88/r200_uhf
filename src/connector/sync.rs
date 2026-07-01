@@ -1,4 +1,6 @@
-use crate::connector::{calculate_transmit_power, clear_non_ascii, hexdump_line, Connector, ConnectorError, WorkingArea};
+use crate::connector::{
+    Connector, ConnectorError, WorkingArea, calculate_transmit_power, clear_non_ascii, hexdump_line,
+};
 use crate::frame::{Command, Frame, R200_FRAME_END, R200_FRAME_HEADER};
 use crate::packet::Packet;
 use crate::rfid::Rfid;
@@ -216,7 +218,7 @@ where
         self.send_packet(Command::GetWorkingArea)?;
         let p = self.single_read_from_serial()?;
         if let Some(p) = p {
-            return Connector::<S>::parse_to_working_area(p)
+            return Connector::<S>::parse_to_working_area(p);
         }
         Err(ConnectorError::NoPacketReceived)
     }

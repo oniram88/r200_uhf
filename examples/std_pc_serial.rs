@@ -1,20 +1,20 @@
-use log::{ LevelFilter, info,  error};
-use r200_uhf::{Rfid};
+use log::{LevelFilter, error, info};
+use r200_uhf::Rfid;
 use std::collections::HashSet;
 use std::thread::sleep;
 use std::time::Duration;
 
 #[path = "../examples/lib/common.rs"]
 mod common;
+use crate::common::{AppError, get_args};
 use common::logger_builder;
 use r200_uhf::connector::Connector;
 use r200_uhf::connector::sync::SyncIO;
-use crate::common::{get_args, AppError};
 
 fn main() -> Result<(), AppError> {
     logger_builder(LevelFilter::Info);
 
-    let (port_name,baud,power)=get_args().unwrap();
+    let (port_name, baud, power) = get_args().unwrap();
 
     info!("Opening port {} at {} baud...", port_name, baud);
     let port = serialport::new(&port_name, baud)
@@ -27,14 +27,14 @@ fn main() -> Result<(), AppError> {
 
     // It's possible that the device was not correct terminated and the multiple polling instruction
     // is enabled. Send a stop.
-   loop {
-       if  connector.stop_multiple_polling_instructions().is_err() {
-           error!("FAIL: Connector stop multiple polling");
-           sleep(Duration::from_millis(500));
-       }else{
-           break;
-       }
-   }
+    loop {
+        if connector.stop_multiple_polling_instructions().is_err() {
+            error!("FAIL: Connector stop multiple polling");
+            sleep(Duration::from_millis(500));
+        } else {
+            break;
+        }
+    }
 
     info!(
         "{}",

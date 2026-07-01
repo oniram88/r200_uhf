@@ -1,10 +1,12 @@
-use std::time::Duration;
-use async_trait::async_trait;
-use crate::connector::{calculate_transmit_power, clear_non_ascii, hexdump_line, Connector, ConnectorError, WorkingArea};
+use crate::connector::{
+    Connector, ConnectorError, WorkingArea, calculate_transmit_power, clear_non_ascii, hexdump_line,
+};
 use crate::frame::{Command, Frame, R200_FRAME_END, R200_FRAME_HEADER};
 use crate::packet::Packet;
 use crate::rfid::Rfid;
+use async_trait::async_trait;
 use log::{debug, info};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[async_trait]
@@ -90,24 +92,27 @@ where
 
         loop {
             let read_future = self.port.read(&mut read_buf);
-            
+
             // In a real async scenario with timeout, we might use tokio::time::timeout
-            let raw_data_size = match tokio::time::timeout(Duration::from_millis(500), read_future).await {
-                Ok(res) => res,
-                Err(_) => {
-                    if output.is_empty() {
-                        return Err(ConnectorError::Timeout);
+            let raw_data_size =
+                match tokio::time::timeout(Duration::from_millis(500), read_future).await {
+                    Ok(res) => res,
+                    Err(_) => {
+                        if output.is_empty() {
+                            return Err(ConnectorError::Timeout);
+                        }
+                        break;
                     }
-                    break;
-                }
-            };
+                };
 
             match raw_data_size {
                 Ok(n) if n > 0 => {
                     rolling.extend_from_slice(&read_buf[..n]);
                     hexdump_line("[RAW] ", &rolling);
 
-                    while let Some(header_pos) = rolling.iter().position(|&x| x == R200_FRAME_HEADER) {
+                    while let Some(header_pos) =
+                        rolling.iter().position(|&x| x == R200_FRAME_HEADER)
+                    {
                         if let Some(end_pos) = rolling.iter().position(|&x| x == R200_FRAME_END) {
                             if end_pos > header_pos {
                                 let chunk = &rolling[header_pos..=end_pos];
@@ -116,7 +121,9 @@ where
                                     if p.is_valid() {
                                         debug!("{}", p.debug());
                                         output.push(p);
-                                        if output.len() >= num_expected_responses.unwrap_or(100000) as usize {
+                                        if output.len()
+                                            >= num_expected_responses.unwrap_or(100000) as usize
+                                        {
                                             return Ok(Some(output));
                                         }
                                     }
@@ -147,7 +154,7 @@ where
     async fn get_working_area(&mut self) -> Result<WorkingArea, ConnectorError> {
         self.send_packet(Command::GetWorkingArea).await?;
         if let Some(p) = self.single_read_from_serial().await? {
-            return Connector::<S>::parse_to_working_area(p)
+            return Connector::<S>::parse_to_working_area(p);
         }
         Err(ConnectorError::NoPacketReceived)
     }
@@ -169,7 +176,8 @@ where
     }
 
     async fn set_transmission_power(&mut self, power: f64) -> Result<(), ConnectorError> {
-        self.send_packet(Command::SetTransmissionPower(power)).await?;
+        self.send_packet(Command::SetTransmissionPower(power))
+            .await?;
         Connector::<S>::_set_transmission_power(self.single_read_from_serial().await?, power)
     }
 
@@ -180,13 +188,15 @@ where
     }
 
     async fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
-        self.send_packet(Command::MultiplePollingInstruction(100)).await?;
+        self.send_packet(Command::MultiplePollingInstruction(100))
+            .await?;
         let response = self.read_from_serial(Some(100)).await?;
         self.parse_rfid_packets(response)
     }
 
     async fn stop_multiple_polling_instructions(&mut self) -> Result<(), ConnectorError> {
-        self.send_packet(Command::StopMultiplePollingInstruction).await?;
+        self.send_packet(Command::StopMultiplePollingInstruction)
+            .await?;
         if let Some(p) = self.single_read_from_serial().await? {
             if matches!(p.command(), Ok(Command::StopMultiplePollingInstruction)) {
                 return Ok(());
@@ -201,11 +211,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncRead, AsyncWrite};
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-    use std::sync::{Arc, Mutex};
     use std::io;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+    use std::task::{Context, Poll};
+    use tokio::io::{AsyncRead, AsyncWrite};
 
     struct MockAsyncPort {
         read_data: Vec<u8>,
@@ -256,12 +266,12 @@ mod tests {
         // Replace TX frame with RX frame for test (mocking device response)
         f1[1] = 0x01; // Device to PC
         resp.extend_from_slice(&f1);
-        
+
         // Software Version
         let mut f2 = Frame::new(&Command::SoftwareVersion).to_bytes();
         f2[1] = 0x01;
         resp.extend_from_slice(&f2);
-        
+
         // Manufacturer
         let mut f3 = Frame::new(&Command::Manufacturer).to_bytes();
         f3[1] = 0x01;

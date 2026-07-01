@@ -45,7 +45,9 @@ impl Display for Command {
             Command::GetWorkingChannel => write!(f, "Get Working Channel"),
             Command::GetWorkingArea => write!(f, "Get Working Area"),
             Command::AcquireTransmitPower => write!(f, "Acquire transmit power"),
-            Command::SetTransmissionPower(power) => write!(f, "Set transmission power to {}", power),
+            Command::SetTransmissionPower(power) => {
+                write!(f, "Set transmission power to {}", power)
+            }
             Command::SinglePollingInstruction => write!(f, "Single Polling Instruction"),
             Command::MultiplePollingInstruction(max) => {
                 write!(f, "Multiple Polling Instruction [max: {max} times]")

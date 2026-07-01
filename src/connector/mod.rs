@@ -6,11 +6,11 @@ mod async_impl;
 #[cfg(feature = "async")]
 pub use async_impl::*;
 
+use crate::Rfid;
 use crate::packet::Packet;
 use log::{debug, error, info};
 use std::fmt;
 use std::io;
-use crate::Rfid;
 
 pub struct Connector<P> {
     port: P,
