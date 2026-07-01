@@ -1,77 +1,90 @@
+use crate::connector::{calculate_transmit_power, clear_non_ascii, hexdump_line, Connector, ConnectorError, WorkingArea};
 use crate::frame::{Command, Frame, R200_FRAME_END, R200_FRAME_HEADER};
 use crate::packet::Packet;
 use crate::rfid::Rfid;
-use log::{debug, error, info};
-use std::fmt;
+use log::{debug, error};
 use std::io::{self, Read, Write};
 
-#[derive(Debug)]
-pub enum WorkingArea {
-    China900Mhz,
-    China800Mhz,
-    US,
-    EU,
-    Korea,
-}
-
-#[derive(Debug)]
-pub enum ConnectorError {
-    Io(io::Error),
-    Timeout,
-    InvalidWorkingArea,
-    NoPacketReceived,
-    FailedSetting(String),
-    SerialRead(String),
-    ErrorStopMultiPolling(String),
-}
-
-impl fmt::Display for ConnectorError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ConnectorError::Io(e) => write!(f, "IO error: {}", e),
-            ConnectorError::Timeout => write!(f, "Timeout"),
-            ConnectorError::InvalidWorkingArea => write!(f, "Invalid working area"),
-            ConnectorError::NoPacketReceived => write!(f, "No packet received"),
-            ConnectorError::SerialRead(msg) => write!(f, "Serial read error: {}", msg),
-            ConnectorError::FailedSetting(msg) => write!(f, "Failed Setting: {}", msg),
-            ConnectorError::ErrorStopMultiPolling(msg) => {
-                write!(f, "Impossible to stop multiple polling [{msg}]")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ConnectorError {}
-
-impl From<io::Error> for ConnectorError {
-    fn from(err: io::Error) -> Self {
-        ConnectorError::Io(err)
-    }
-}
-
-pub struct Connector<P>
-where
-    P: Read + Write,
-{
-    port: P,
-}
-
-impl<P> Connector<P>
-where
-    P: Read + Write,
-{
-    /// Create a new Connector from an already opened SerialPort.
-    ///
-    /// Parameters
-    /// - p0: A boxed serialport::SerialPort already configured (baud rate, timeout, etc.)
+pub trait SyncIO {
+    type Socket: Read + Write;
+    /// Setup the reader with default settings (inspired by e710_uhf)
+    fn setup_reader(&mut self) -> Result<(), ConnectorError>;
+    fn get_module_info(&mut self) -> Result<String, ConnectorError>;
+    /// Builds and sends the command
+    fn send_packet(&mut self, command: Command) -> Result<(), ConnectorError>;
+    fn single_read_from_serial(&mut self) -> Result<Option<Packet>, ConnectorError>;
+    fn read_from_serial(
+        &mut self,
+        num_expected_responses: Option<u32>,
+    ) -> Result<Option<Vec<Packet>>, ConnectorError>;
+    /// Get the current regulatory working area configured on the device.
     ///
     /// Returns
-    /// A Connector instance bound to the given serial port.
-    pub fn new(p0: P) -> Self {
-        Connector { port: p0 }
+    /// - Ok(WorkingArea) with the region inferred from the device response.
+    /// - Err(ConnectorError::InvalidWorkingArea) if the response contains an unknown code.
+    /// - Err(ConnectorError::NoPacketReceived) if nothing is received.
+    /// - Other ConnectorError variants on I/O failure or timeout.
+    fn get_working_area(&mut self) -> Result<WorkingArea, ConnectorError>;
+    /// Get the current working RF channel as a frequency in MHz.
+    ///
+    /// The raw channel index returned by the device is converted to MHz based on
+    /// the configured WorkingArea. Different regions use different spacing and base frequencies.
+    ///
+    /// Returns
+    /// - Ok(f64) with the center frequency in MHz.
+    /// - Err(ConnectorError::NoPacketReceived) if no response is obtained.
+    /// - Other ConnectorError variants on I/O failure, timeout, or unknown working area.
+    fn get_working_channel(&mut self) -> Result<f64, ConnectorError>;
+    /// Read the current transmit power reported by the device.
+    ///
+    /// The device returns two bytes that represent the power value scaled by 100.
+    /// This method combines them and returns the value as f64.
+    ///
+    /// Returns
+    /// - Ok(f64) with the transmit power (device-specific units, typically dBm).
+    /// - Err(ConnectorError::NoPacketReceived) if no response is obtained.
+    /// - Other ConnectorError variants on I/O failure or timeout.
+    fn get_transmit_power(&mut self) -> Result<f64, ConnectorError>;
+    /// Set the transmitter output power.
+    ///
+    /// Parameters
+    /// - power: Desired transmit power in device-specific units (typically dBm).
+    ///
+    /// Returns
+    /// - Ok(()) when the device acknowledges the setting.
+    /// - Err(ConnectorError::NoPacketReceived) if no response is obtained.
+    /// - Other ConnectorError variants on I/O failure or timeout.
+    fn set_transmission_power(&mut self, power: f64) -> Result<(), ConnectorError>;
+    /// Perform a single inventory (poll) and return the list of detected tags.
+    ///
+    /// Sends a SinglePollingInstruction to the reader and parses all returned packets
+    /// into a collection of Rfid records containing RSSI, PC, EPC (UID) and CRC.
+    ///
+    /// Returns
+    /// - Ok(Vec<Rfid>) possibly empty if no tags are present.
+    /// - Err(ConnectorError::Timeout or other) on communication errors.
+    fn single_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError>;
+    fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError>; // Start Multi: AA 00 27 00 03 22 FF FF 4A DD
+    fn enable_multiple_polling_instructions(
+        &mut self,
+        pool_times: u16,
+    ) -> Result<(), ConnectorError>; // Stop Multi: AA 00 28 00 00 28 DD
+    fn stop_multiple_polling_instructions(&mut self) -> Result<(), ConnectorError>;
+}
+
+impl<S> SyncIO for Connector<S>
+where
+    S: Read + Write,
+{
+    type Socket = S;
+
+    /// Setup the reader with default settings (inspired by e710_uhf)
+    fn setup_reader(&mut self) -> Result<(), ConnectorError> {
+        self.stop_multiple_polling_instructions().ok();
+        Ok(())
     }
 
-    pub fn get_module_info(&mut self) -> Result<String, ConnectorError> {
+    fn get_module_info(&mut self) -> Result<String, ConnectorError> {
         self.send_packet(Command::HardwareVersion)?;
         let hardware = self.single_read_from_serial();
         self.send_packet(Command::SoftwareVersion)?;
@@ -199,18 +212,11 @@ where
     /// - Err(ConnectorError::InvalidWorkingArea) if the response contains an unknown code.
     /// - Err(ConnectorError::NoPacketReceived) if nothing is received.
     /// - Other ConnectorError variants on I/O failure or timeout.
-    pub fn get_working_area(&mut self) -> Result<WorkingArea, ConnectorError> {
+    fn get_working_area(&mut self) -> Result<WorkingArea, ConnectorError> {
         self.send_packet(Command::GetWorkingArea)?;
         let p = self.single_read_from_serial()?;
         if let Some(p) = p {
-            return match p.get_data()[0] {
-                0 => Ok(WorkingArea::China900Mhz),
-                1 => Ok(WorkingArea::China800Mhz),
-                2 => Ok(WorkingArea::US),
-                3 => Ok(WorkingArea::EU),
-                4 => Ok(WorkingArea::Korea),
-                _ => Err(ConnectorError::InvalidWorkingArea),
-            };
+            return Connector::<S>::parse_to_working_area(p)
         }
         Err(ConnectorError::NoPacketReceived)
     }
@@ -224,27 +230,11 @@ where
     /// - Ok(f64) with the center frequency in MHz.
     /// - Err(ConnectorError::NoPacketReceived) if no response is obtained.
     /// - Other ConnectorError variants on I/O failure, timeout, or unknown working area.
-    pub fn get_working_channel(&mut self) -> Result<f64, ConnectorError> {
+    fn get_working_channel(&mut self) -> Result<f64, ConnectorError> {
         self.send_packet(Command::GetWorkingChannel)?;
         let p = self.single_read_from_serial()?;
         if let Some(p) = p {
-            match self.get_working_area()? {
-                WorkingArea::China900Mhz => {
-                    return Ok((p.get_data()[0] as f64) * 0.25 + 920.125);
-                }
-                WorkingArea::China800Mhz => {
-                    return Ok((p.get_data()[0] as f64) * 0.25 + 840.125);
-                }
-                WorkingArea::US => {
-                    return Ok((p.get_data()[0] as f64) * 0.50 + 902.25);
-                }
-                WorkingArea::EU => {
-                    return Ok((p.get_data()[0] as f64) * 0.2 + 865.1);
-                }
-                WorkingArea::Korea => {
-                    return Ok((p.get_data()[0] as f64) * 0.2 + 917.1);
-                }
-            }
+            return Ok(self.get_working_area()?.packet_to_64(p));
         }
         Err(ConnectorError::NoPacketReceived)
     }
@@ -258,12 +248,11 @@ where
     /// - Ok(f64) with the transmit power (device-specific units, typically dBm).
     /// - Err(ConnectorError::NoPacketReceived) if no response is obtained.
     /// - Other ConnectorError variants on I/O failure or timeout.
-    pub fn get_transmit_power(&mut self) -> Result<f64, ConnectorError> {
+    fn get_transmit_power(&mut self) -> Result<f64, ConnectorError> {
         self.send_packet(Command::AcquireTransmitPower)?;
         let p = self.single_read_from_serial()?;
         if let Some(p) = p {
-            let data = p.get_data();
-            return Ok(((data[0] as u16) * 16 * 16 + (data[1] as u16)) as f64 / 100.0);
+            return Ok(calculate_transmit_power(p));
         }
         Err(ConnectorError::NoPacketReceived)
     }
@@ -277,23 +266,9 @@ where
     /// - Ok(()) when the device acknowledges the setting.
     /// - Err(ConnectorError::NoPacketReceived) if no response is obtained.
     /// - Other ConnectorError variants on I/O failure or timeout.
-    pub fn set_trasmission_power(&mut self, power: f64) -> Result<(), ConnectorError> {
-        self.send_packet(Command::SetTrasmissionPower(power))?;
-        let p = self.single_read_from_serial()?;
-        if let Some(p) = p {
-            let data = p.get_data();
-            if data[0] == 0x00 {
-                info!("Power correct set to {}", power);
-                return Ok(());
-            } else {
-                error!("Power not set to {}", power);
-                return Err(ConnectorError::FailedSetting(format!(
-                    "Transmission power not set to {}",
-                    power
-                )));
-            }
-        }
-        Err(ConnectorError::NoPacketReceived)
+    fn set_transmission_power(&mut self, power: f64) -> Result<(), ConnectorError> {
+        self.send_packet(Command::SetTransmissionPower(power))?;
+        Connector::<S>::_set_transmission_power(self.single_read_from_serial()?, power)
     }
 
     /// Perform a single inventory (poll) and return the list of detected tags.
@@ -304,47 +279,20 @@ where
     /// Returns
     /// - Ok(Vec<Rfid>) possibly empty if no tags are present.
     /// - Err(ConnectorError::Timeout or other) on communication errors.
-    pub fn single_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
+    fn single_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
         self.send_packet(Command::SinglePollingInstruction)?;
         let response = self.read_from_serial(None)?;
         self.parse_rfid_packets(response)
     }
 
-    fn parse_rfid_packets(
-        &mut self,
-        response: Option<Vec<Packet>>,
-    ) -> Result<Vec<Rfid>, ConnectorError> {
-        let mut rfids: Vec<Rfid> = Vec::new();
-
-        let ps = response.unwrap_or(vec![]);
-
-        if ps.len() == 1 && ps[0].get_data()[0] == 0x15 {
-            debug!("Nessun tag presente in memoria");
-        } else {
-            for p in ps.iter() {
-                let data = p.get_data();
-                debug!("Lettura RFID Data: {:?}", data);
-
-                if data.len() != 17 {
-                    // Skip di qualsiasi pacchetto non valido
-                    continue;
-                }
-
-                rfids.push(Rfid::from_raw(data))
-            }
-        }
-
-        Ok(rfids)
-    }
-
-    pub fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
+    fn multi_polling_instruction(&mut self) -> Result<Vec<Rfid>, ConnectorError> {
         self.send_packet(Command::MultiplePollingInstruction(100))?;
         let response = self.read_from_serial(Some(100))?;
         self.parse_rfid_packets(response)
     }
 
     // Start Multi: AA 00 27 00 03 22 FF FF 4A DD
-    pub fn enable_multiple_polling_instructions(
+    fn enable_multiple_polling_instructions(
         &mut self,
         pool_times: u16,
     ) -> Result<(), ConnectorError> {
@@ -352,7 +300,7 @@ where
     }
 
     // Stop Multi: AA 00 28 00 00 28 DD
-    pub fn stop_multiple_polling_instructions(&mut self) -> Result<(), ConnectorError> {
+    fn stop_multiple_polling_instructions(&mut self) -> Result<(), ConnectorError> {
         self.send_packet(Command::StopMultiplePollingInstruction)?;
         if let Some(p) = self.single_read_from_serial()? {
             if matches!(p.command(), Ok(Command::StopMultiplePollingInstruction)) {
@@ -369,27 +317,11 @@ where
     }
 }
 
-fn hexdump_line(prefix: &str, data: &[u8]) {
-    let mut out = format!("{}", prefix);
-    for b in data {
-        out.push_str(format!("{:02X} ", b).as_str());
-    }
-    debug!("{}", out);
-}
-
-fn clear_non_ascii(s: &str) -> String {
-    s.chars()
-        .filter(|c| c.is_ascii())
-        .collect::<String>()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serialport::{ClearBuffer, DataBits, FlowControl, Parity, SerialPort, StopBits};
     use std::io::{Read, Write};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
 
     // Helper: build a device->PC frame with given command code and data bytes
     // cmd: command code for the request
@@ -431,7 +363,6 @@ mod tests {
         writes: Vec<Vec<u8>>, // captured writes
         // queue of reads to return on successive read() calls
         chats: Vec<ResponseType>,
-        timeout: Duration,
     }
 
     struct MockSerialPort {
@@ -449,15 +380,8 @@ mod tests {
                 state: Arc::new(Mutex::new(MockState {
                     writes: vec![],
                     chats,
-                    timeout: Duration::from_millis(50),
                 })),
             }
-        }
-        fn take_writes(&self) -> Vec<Vec<u8>> {
-            let mut st = self.state.lock().unwrap();
-            let out = st.writes.clone();
-            st.writes.clear();
-            out
         }
     }
 
@@ -547,7 +471,7 @@ mod tests {
         let sw = make_frame(0x03, Some(vec![0x01]), b"SW2.0");
         let mf = make_frame(0x03, Some(vec![0x02]), b"ACME");
         let mock = MockSerialPort::new(vec![hw, sw, mf]);
-        let mut connector = Connector::new(Box::new(mock));
+        let mut connector = Connector::new(mock);
 
         let info = connector.get_module_info().unwrap();
         assert!(info.contains("Hardware: HW1.0"));
@@ -566,7 +490,7 @@ mod tests {
         ] {
             let frame = make_frame(0x08, None, &[code]);
             let mock = MockSerialPort::new(vec![frame]);
-            let mut connector = Connector::new(Box::new(mock));
+            let mut connector = Connector::new(mock);
             let area = connector.get_working_area().unwrap();
             // Compare by variant name via debug
             assert_eq!(format!("{:?}", area), format!("{:?}", expected));
@@ -580,7 +504,7 @@ mod tests {
         let chan = make_frame(0xAA, None, &[4]);
         let area = make_frame(0x08, None, &[3]);
         let mock = MockSerialPort::new(vec![chan, area]);
-        let mut connector = Connector::new(Box::new(mock));
+        let mut connector = Connector::new(mock);
         let freq = connector.get_working_channel().unwrap();
         assert!((freq - (4.0 * 0.2 + 865.1)).abs() < 1e-6);
     }
@@ -590,7 +514,7 @@ mod tests {
         // 27.50 -> 2750 -> 0x0A BE (for example 0x0A, 0xBE => 2750)
         let frame = make_frame(0xB7, None, &[0x0A, 0xBE]);
         let mock = MockSerialPort::new(vec![frame]);
-        let mut connector = Connector::new(Box::new(mock));
+        let mut connector = Connector::new(mock);
         let p = connector.get_transmit_power().unwrap();
         assert!((p - 27.50).abs() < 1e-6);
     }
@@ -600,8 +524,8 @@ mod tests {
         // ACK byte 0x00
         let frame = make_frame(0xB6, Some(vec![0x07, 0xD0]), &[0x00]);
         let mock = MockSerialPort::new(vec![frame]);
-        let mut connector = Connector::new(Box::new(mock));
-        connector.set_trasmission_power(20.0).unwrap();
+        let mut connector = Connector::new(mock);
+        connector.set_transmission_power(20.0).unwrap();
     }
 
     #[test]
@@ -626,7 +550,7 @@ mod tests {
         };
         let timeout = make_error_frame(io::Error::new(io::ErrorKind::TimedOut, "done"));
         let mock = MockSerialPort::new(vec![tag1, tag2, timeout]);
-        let mut connector = Connector::new(Box::new(mock));
+        let mut connector = Connector::new(mock);
         let tags = connector.single_polling_instruction().unwrap();
         assert_eq!(tags.len(), 2);
         assert_eq!(tags[0].uid(), "DEADBEEF0102030405060708");
@@ -644,7 +568,7 @@ mod tests {
             f2,
             make_error_frame(io::Error::new(io::ErrorKind::TimedOut, "t")),
         ]);
-        let mut connector = Connector::new(Box::new(mock));
+        let mut connector = Connector::new(mock);
         let out = connector.read_from_serial(None).unwrap().unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].get_data(), vec![2]);
