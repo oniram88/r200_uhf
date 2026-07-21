@@ -32,9 +32,9 @@ impl Packet {
         if 5 + 2 + self.data_len() as usize != self.raw_data.len() {
             return false;
         }
-        // Validate checksum: sum of bytes from index 2 to second-to-last byte
+        // Validate checksum: sum of bytes from index 1 (type) to second-to-last byte
         let cs_pos = self.raw_data.len() - 2;
-        let sum: u16 = self.raw_data[2..cs_pos].iter().map(|&b| b as u16).sum();
+        let sum: u16 = self.raw_data[1..cs_pos].iter().map(|&b| b as u16).sum();
         if (sum & 0xFF) as u8 != self.raw_data[cs_pos] {
             return false;
         }
@@ -83,8 +83,8 @@ mod tests {
         v.push((len >> 8) as u8);
         v.push((len & 0xFF) as u8);
         v.extend_from_slice(data);
-        // checksum is sum of bytes from index 2 (cmd) to last data byte, low 8 bits
-        let sum: u16 = v[2..].iter().map(|&b| b as u16).sum();
+        // checksum is sum of bytes from index 1 (type) to last data byte, low 8 bits
+        let sum: u16 = v[1..].iter().map(|&b| b as u16).sum();
         v.push((sum & 0xFF) as u8);
         v.push(crate::frame::R200_FRAME_END);
         v
