@@ -23,7 +23,13 @@ impl<P> Connector<P> {
     }
 
     fn parse_to_working_area(p: Packet) -> Result<WorkingArea, ConnectorError> {
-        match p.get_data()[0] {
+        let data = p.get_data();
+        if data.is_empty() {
+            return Err(ConnectorError::InvalidResponse(
+                "Empty working area response".into(),
+            ));
+        }
+        match data[0] {
             0 => Ok(WorkingArea::China900Mhz),
             1 => Ok(WorkingArea::China800Mhz),
             2 => Ok(WorkingArea::US),
@@ -36,6 +42,11 @@ impl<P> Connector<P> {
     fn _set_transmission_power(p: Option<Packet>, power: f64) -> Result<(), ConnectorError> {
         if let Some(p) = p {
             let data = p.get_data();
+            if data.is_empty() {
+                return Err(ConnectorError::InvalidResponse(
+                    "Empty set-power ACK".into(),
+                ));
+            }
             if data[0] == 0x00 {
                 info!("Power correct set to {}", power);
                 return Ok(());
@@ -56,7 +67,7 @@ impl<P> Connector<P> {
     ) -> Result<Vec<Rfid>, ConnectorError> {
         let mut rfids = Vec::new();
         if let Some(ps) = response {
-            if ps.len() == 1 && ps[0].get_data()[0] == 0x15 {
+            if ps.len() == 1 && ps[0].get_data().first() == Some(&0x15) {
                 debug!("No tags present");
             } else {
                 for p in ps {
@@ -83,12 +94,16 @@ pub enum WorkingArea {
 
 impl WorkingArea {
     pub fn packet_to_64(&self, p: Packet) -> f64 {
+        let data = p.get_data();
+        if data.is_empty() {
+            return 0.0;
+        }
         match self {
-            WorkingArea::China900Mhz => return (p.get_data()[0] as f64) * 0.25 + 920.125,
-            WorkingArea::China800Mhz => return (p.get_data()[0] as f64) * 0.25 + 840.125,
-            WorkingArea::US => return (p.get_data()[0] as f64) * 0.50 + 902.25,
-            WorkingArea::EU => return (p.get_data()[0] as f64) * 0.2 + 865.1,
-            WorkingArea::Korea => return (p.get_data()[0] as f64) * 0.2 + 917.1,
+            WorkingArea::China900Mhz => return (data[0] as f64) * 0.25 + 920.125,
+            WorkingArea::China800Mhz => return (data[0] as f64) * 0.25 + 840.125,
+            WorkingArea::US => return (data[0] as f64) * 0.50 + 902.25,
+            WorkingArea::EU => return (data[0] as f64) * 0.2 + 865.1,
+            WorkingArea::Korea => return (data[0] as f64) * 0.2 + 917.1,
         }
     }
 }
@@ -100,6 +115,7 @@ pub enum ConnectorError {
     InvalidWorkingArea,
     NoPacketReceived,
     FailedSetting(String),
+    InvalidResponse(String),
     SerialRead(String),
     ErrorStopMultiPolling(String),
 }
@@ -113,6 +129,7 @@ impl fmt::Display for ConnectorError {
             ConnectorError::NoPacketReceived => write!(f, "No packet received"),
             ConnectorError::SerialRead(msg) => write!(f, "Serial read error: {}", msg),
             ConnectorError::FailedSetting(msg) => write!(f, "Failed Setting: {}", msg),
+            ConnectorError::InvalidResponse(msg) => write!(f, "Invalid response: {}", msg),
             ConnectorError::ErrorStopMultiPolling(msg) => {
                 write!(f, "Impossible to stop multiple polling [{msg}]")
             }
@@ -140,7 +157,15 @@ pub(crate) fn hexdump_line(prefix: &str, data: &[u8]) {
     log::debug!("{} {}", prefix, out);
 }
 
-pub(crate) fn calculate_transmit_power(p: Packet) -> f64 {
+pub(crate) fn calculate_transmit_power(p: Packet) -> Result<f64, ConnectorError> {
     let data = p.get_data();
-    ((data[0] as u16) * 256 + (data[1] as u16)) as f64 / 100.0
+    if data.len() >= 2 {
+        Ok(((data[0] as u16) * 256 + (data[1] as u16)) as f64 / 100.0)
+    } else if data.len() == 1 {
+        Ok(data[0] as f64)
+    } else {
+        Err(ConnectorError::InvalidResponse(
+            "Empty power response".into(),
+        ))
+    }
 }

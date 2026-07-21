@@ -254,7 +254,7 @@ where
         self.send_packet(Command::AcquireTransmitPower)?;
         let p = self.single_read_from_serial()?;
         if let Some(p) = p {
-            return Ok(calculate_transmit_power(p));
+            return calculate_transmit_power(p);
         }
         Err(ConnectorError::NoPacketReceived)
     }

@@ -28,8 +28,14 @@ impl Packet {
 
     /// Check if packet is valid
     pub fn is_valid(&self) -> bool {
-        // If length is incorrect with wath is sended
+        // If length is incorrect with what is expected
         if 5 + 2 + self.data_len() as usize != self.raw_data.len() {
+            return false;
+        }
+        // Validate checksum: sum of bytes from index 2 to second-to-last byte
+        let cs_pos = self.raw_data.len() - 2;
+        let sum: u16 = self.raw_data[2..cs_pos].iter().map(|&b| b as u16).sum();
+        if (sum & 0xFF) as u8 != self.raw_data[cs_pos] {
             return false;
         }
         true
