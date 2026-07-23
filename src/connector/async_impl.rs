@@ -170,7 +170,7 @@ where
     async fn get_transmit_power(&mut self) -> Result<f64, ConnectorError> {
         self.send_packet(Command::AcquireTransmitPower).await?;
         if let Some(p) = self.single_read_from_serial().await? {
-            return Ok(calculate_transmit_power(p));
+            return calculate_transmit_power(p);
         }
         Err(ConnectorError::NoPacketReceived)
     }

@@ -254,7 +254,7 @@ where
         self.send_packet(Command::AcquireTransmitPower)?;
         let p = self.single_read_from_serial()?;
         if let Some(p) = p {
-            return Ok(calculate_transmit_power(p));
+            return calculate_transmit_power(p);
         }
         Err(ConnectorError::NoPacketReceived)
     }
@@ -339,8 +339,8 @@ mod tests {
         v.push((len >> 8) as u8);
         v.push((len & 0xFF) as u8);
         v.extend_from_slice(data);
-        // checksum: sum of bytes starting at index 2 (cmd, len, data)
-        let sum: u16 = v[2..].iter().map(|&b| b as u16).sum();
+        // checksum: sum of bytes starting at index 1 (type) to last data byte, low 8 bits
+        let sum: u16 = v[1..].iter().map(|&b| b as u16).sum();
         v.push((sum & 0xFF) as u8);
         v.push(R200_FRAME_END);
 
