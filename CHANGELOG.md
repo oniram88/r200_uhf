@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## 0.5.1 - 2026-07-23
+#### Bug Fixes
+- Add bounds check and checksum validation for malformed responses (#4) - (d8dc571) - Beni Bachmann
+#### Continuous Integration
+- Fix command with all features - (8ee331c) - Marino Bonetti
+
+- - -
+
 ## 0.5.0 - 2026-07-01
 #### Features
 - Add serializable through feature - (fa48a82) - Marino Bonetti
