@@ -1,12 +1,3 @@
-//! R200 UHF RFID reader command-line interface.
-//!
-//! Enabled by the `cli` cargo feature, which also builds the `r200` binary in
-//! `src/main.rs`. This module is a thin wrapper around the blocking
-//! [`SyncIO`](crate::connector::sync::SyncIO) API.
-
-mod display;
-mod port;
-
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,44 +6,33 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
-use crate::connector::sync::SyncIO;
-use crate::connector::{WorkingArea, parse_hex_str};
-use display::{display_tag, hex};
-use port::{ReaderGuard, SharedPort};
+use crate::core::command::Command;
 
-/// Parse a hex string (with optional `0x` prefix) into bytes.
+mod display;
+
+/// Parse a hex string (with or without `0x` prefix) into bytes.
+///
+/// # Errors
+///
+/// Returns an error if the string has odd length or contains non-hex characters.
 pub fn parse_hex(s: &str) -> Result<Vec<u8>> {
     let s = s.strip_prefix("0x").unwrap_or(s);
     if !s.len().is_multiple_of(2) {
-        anyhow::bail!("Hex string must have even length");
+        anyhow::bail!("hex string must have even length");
     }
-    Ok(parse_hex_str(s))
-}
-
-/// Open the serial port and return a [`Connector`](crate::connector::Connector)
-/// plus a reader guard that stops multi-polling on drop.
-pub fn connect(
-    port_name: &str,
-    baud_rate: u32,
-) -> Result<(crate::connector::Connector<SharedPort>, ReaderGuard)> {
-    let port = serialport::new(port_name, baud_rate)
-        .timeout(Duration::from_millis(500))
-        .open()?;
-    let shared = SharedPort::new(port);
-    shared.clear_input()?;
-    let guard = ReaderGuard::new(shared.clone());
-    let connector = crate::connector::Connector::new(shared);
-    Ok((connector, guard))
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
+        .collect::<std::result::Result<Vec<u8>, _>>()
+        .context("invalid hex character")
 }
 
 #[derive(Parser)]
 #[command(name = "r200", about = "R200 UHF RFID reader")]
 struct Cli {
-    /// Serial port device path. Falls back to the `R200_PORT` env var.
     #[arg(long, env = "R200_PORT")]
     port: String,
 
-    /// Serial port baud rate
     #[arg(long, default_value = "115200")]
     baud: u32,
 
@@ -62,58 +42,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show module info and current region
+    /// Show module info, region, channel, power
     Info,
-    /// Poll for a tag (waits until found)
+    /// Poll for a single tag
     Poll,
-    /// Continuous tag scanning (no duplicates)
-    Scan,
-    /// Write EPC to a tag
-    Write {
-        /// 12-byte EPC in hex (24 chars)
-        epc: String,
-        /// Only write to tag with this EPC
+    /// Continuous scan with deduplication (Ctrl+C to stop)
+    Scan {
+        /// Skip sending `StopMultiplePolling` on exit
         #[arg(long)]
-        select: Option<String>,
+        no_stop: bool,
     },
-    /// Write data to any memory bank of a tag
-    WriteMem {
-        /// Data bytes in hex (even number of chars)
-        data: String,
-        /// Memory bank: 0=Reserved, 1=EPC, 2=TID, 3=User
-        #[arg(long, default_value = "0")]
-        bank: u8,
-        /// Word address to start writing at
-        #[arg(long, default_value = "0")]
-        addr: u16,
-        /// 4-byte access password in hex (8 chars, default 00000000)
-        #[arg(long, default_value = "00000000")]
-        access: String,
-        /// Only write to tag with this EPC
-        #[arg(long)]
-        select: Option<String>,
-    },
-    /// Kill a tag (destroys it permanently)
-    Kill {
-        /// 4-byte kill password in hex (8 chars, default 00000000)
-        #[arg(long, default_value = "00000000")]
-        password: String,
-        /// Only kill tag with this EPC
-        #[arg(long)]
-        select: Option<String>,
-    },
-    /// Lock a tag's memory banks
-    Lock {
-        /// 4-byte access password in hex (8 chars, default 00000000)
-        #[arg(long, default_value = "00000000")]
-        password: String,
-        /// 3-byte lock operation in hex (6 chars), e.g. 020080 to lock USER memory
-        #[arg(long, default_value = "020080")]
-        lock_data: String,
-        /// Only lock tag with this EPC
-        #[arg(long)]
-        select: Option<String>,
-    },
+    /// Stop a running multi-polling scan
+    StopScan,
     /// Read memory from a tag
     Read {
         /// Memory bank: 0=Reserved, 1=EPC, 2=TID, 3=User
@@ -122,349 +62,410 @@ enum Commands {
         /// Word address to start reading from
         #[arg(long, default_value = "0")]
         addr: u16,
-        /// Number of words to read
+        /// Number of 16-bit words to read
         #[arg(long, default_value = "6")]
         length: u16,
-        /// 4-byte access password in hex (8 chars, default 00000000)
-        #[arg(long, default_value = "00000000")]
-        access: String,
-        /// Only read tag with this EPC
+        /// Only read tag matching this EPC (hex)
         #[arg(long)]
         select: Option<String>,
     },
-    /// Set the RF region
+    /// Write a new EPC to a tag
+    Write {
+        /// New EPC in hex (24 hex chars = 12 bytes)
+        epc: String,
+        /// Only write to tag matching this EPC (hex)
+        #[arg(long)]
+        select: Option<String>,
+    },
+    /// Write data to any memory bank
+    WriteMem {
+        /// Data bytes in hex (even length)
+        data: String,
+        /// Memory bank: 0=Reserved, 1=EPC, 2=TID, 3=User
+        #[arg(long, default_value = "0")]
+        bank: u8,
+        /// Word address to start writing at
+        #[arg(long, default_value = "0")]
+        addr: u16,
+        /// Only write to tag matching this EPC (hex)
+        #[arg(long)]
+        select: Option<String>,
+    },
+    /// Lock a tag's memory banks
+    Lock {
+        /// Access password in hex (8 chars, default 00000000)
+        #[arg(long, default_value = "00000000")]
+        password: String,
+        /// Lock data in hex (6 chars, e.g. 020080 to lock User bank)
+        #[arg(long, default_value = "020080")]
+        lock_data: String,
+        /// Only lock tag matching this EPC (hex)
+        #[arg(long)]
+        select: Option<String>,
+    },
+    /// Get or set the RF region
     Region {
-        #[arg(value_parser = ["china900", "china800", "eu", "us", "korea"])]
-        area: String,
+        /// Region to set: china900, china800, eu, us, korea
+        area: Option<String>,
     },
     /// Get or set transmit power (dBm)
     Power {
-        /// Power level in dBm (omit to just display current)
+        /// Power level in dBm (omit to display current)
         level: Option<f64>,
     },
 }
 
-/// Run the CLI. Entry point of the `r200` binary.
-pub fn run() -> Result<()> {
-    env_logger::init();
-    let cli = Cli::parse();
-    let (mut connector, _guard) =
-        connect(&cli.port, cli.baud).context("Failed to open serial port")?;
+type Reader = crate::sync::SyncReader<Box<dyn serialport::SerialPort>>;
 
-    match cli.command {
-        Commands::Info => {
-            let info = connector.get_module_info()?;
-            println!("Module: {}", info);
-            let area = connector.get_working_area()?;
-            println!("Region: {:?}", area);
-            if let Ok(ch) = connector.get_working_channel() {
-                println!("Channel: {} MHz", ch);
-            }
-            if let Ok(pow) = connector.get_transmit_power() {
-                println!("Power:   {} dBm", pow);
-            }
+fn wait_for_tag(reader: &mut Reader) -> Result<Vec<u8>> {
+    eprint!("Place a tag on the antenna... ");
+    loop {
+        if let Ok(Some(tag)) = reader.send(&crate::SinglePollingInstruction) {
+            eprintln!("found {}", tag.epc_hex());
+            return Ok(tag.epc);
         }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
 
-        Commands::Poll => {
-            println!("Polling for tags... (place a tag near the antenna)");
-            loop {
-                let tags = connector.single_polling_instruction()?;
-                if let Some(tag) = tags.first() {
-                    display_tag(tag);
-                    break;
-                }
-            }
+fn select_tag(reader: &mut Reader, epc: &[u8]) -> Result<()> {
+    reader.send(&crate::SetSelect::by_epc(epc))?;
+    reader.send(&crate::SetSendSelect(true))?;
+    Ok(())
+}
+
+fn clear_select(reader: &mut Reader) -> Result<()> {
+    reader.send(&crate::SetSendSelect(false))?;
+    reader.send(&crate::SetSelect::by_epc(&[]))?;
+    Ok(())
+}
+
+fn stop_scan(reader: &mut Reader) -> Result<()> {
+    reader.send_only(&crate::StopMultiplePolling)?;
+    let _ = reader.recv();
+    Ok(())
+}
+
+fn resolve_select_epc(select: Option<&String>) -> Result<Option<Vec<u8>>> {
+    match select {
+        Some(s) => Ok(Some(parse_hex(s)?)),
+        None => Ok(None),
+    }
+}
+
+fn cmd_info(reader: &mut Reader) -> Result<()> {
+    let hw = reader.send(&crate::GetModuleInfo {
+        param: crate::ModuleInfoParam::HardwareVersion,
+    })?;
+    let sw = reader.send(&crate::GetModuleInfo {
+        param: crate::ModuleInfoParam::SoftwareVersion,
+    })?;
+    let mfr = reader.send(&crate::GetModuleInfo {
+        param: crate::ModuleInfoParam::Manufacturer,
+    })?;
+    let region = reader.send(&crate::GetWorkingArea)?;
+    let channel = reader.send(&crate::GetWorkingChannel)?;
+    let power = reader.send(&crate::GetTransmitPower)?;
+
+    let freq = region.channel_frequency(channel);
+
+    println!("Hardware:      {}", hw.text);
+    println!("Firmware:      {}", sw.text);
+    println!("Manufacturer:  {}", mfr.text);
+    println!("Region:        {region}");
+    println!("Channel:       {channel} ({freq:.2} MHz)");
+    println!("Power:         {power:.1} dBm");
+    Ok(())
+}
+
+fn cmd_poll(reader: &mut Reader) {
+    println!("Polling for tags...");
+    loop {
+        if let Ok(Some(tag)) = reader.send(&crate::SinglePollingInstruction) {
+            display::display_tag(&tag);
+            break;
         }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
 
-        Commands::Scan => {
-            println!("Scanning for tags... (Ctrl+C to stop)");
-            let running = Arc::new(AtomicBool::new(true));
-            let r = running.clone();
-            ctrlc::set_handler(move || {
-                r.store(false, Ordering::SeqCst);
-            })
-            .context("Ctrl+C handler")?;
-            let mut seen = HashSet::new();
-            while running.load(Ordering::SeqCst) {
-                if let Ok(tags) = connector.multi_polling_instruction() {
-                    for tag in &tags {
-                        if seen.insert(tag.epc.clone()) {
-                            if seen.len() > 1 {
-                                println!("  ---");
-                            }
-                            display_tag(tag);
+fn cmd_scan(reader: &mut Reader, no_stop: bool) -> Result<()> {
+    println!("Scanning... (Ctrl+C to stop)");
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    })
+    .context("setting up Ctrl+C handler")?;
+
+    let mut seen = HashSet::new();
+    while running.load(Ordering::SeqCst) {
+        let _ = reader.send_only(&crate::MultiplePollingInstruction { pool_times: 100 });
+
+        loop {
+            match reader.recv() {
+                Ok(frame) if frame.command_code == 0x22 => {
+                    if let Ok(Some(tag)) =
+                        crate::SinglePollingInstruction.decode_response(&frame.data)
+                    {
+                        if seen.insert(tag.epc_hex()) {
+                            display::display_tag(&tag);
                         }
                     }
                 }
+                Ok(_) => {}
+                Err(_) => break,
             }
-            // Always leave the reader out of multi-polling mode, even on Ctrl+C.
-            connector.stop_multiple_polling_instructions()?;
+        }
+    }
+
+    if !no_stop {
+        stop_scan(reader)?;
+    }
+    println!("Scan stopped.");
+    Ok(())
+}
+
+fn cmd_read(
+    reader: &mut Reader,
+    bank: u8,
+    addr: u16,
+    length: u16,
+    select: Option<&String>,
+) -> Result<()> {
+    let mem_bank = crate::MemBank::from_byte(bank)
+        .ok_or_else(|| anyhow::anyhow!("invalid bank {bank}, must be 0-3"))?;
+
+    let select_epc = resolve_select_epc(select)?;
+
+    if let Some(ref epc) = select_epc {
+        select_tag(reader, epc)?;
+    } else {
+        let _ = wait_for_tag(reader)?;
+    }
+
+    println!("Reading {length} words from {mem_bank} bank, addr 0x{addr:04X}...");
+
+    let data = reader.send(&crate::ReadLabel {
+        access_password: [0x00; 4],
+        bank: mem_bank,
+        address: addr,
+        length,
+    })?;
+
+    if select_epc.is_some() {
+        clear_select(reader)?;
+    }
+
+    let hex_str = crate::util::hex_upper(&data);
+    println!("Hex: {hex_str}");
+    Ok(())
+}
+
+fn cmd_write(reader: &mut Reader, epc: &str, select: Option<&String>) -> Result<()> {
+    let epc_bytes = parse_hex(epc)?;
+    if epc_bytes.len() != 12 {
+        anyhow::bail!("EPC must be exactly 24 hex characters (12 bytes)");
+    }
+
+    let select_epc = resolve_select_epc(select)?;
+
+    let current_epc = wait_for_tag(reader)?;
+    let target = select_epc.as_ref().unwrap_or(&current_epc);
+    select_tag(reader, target)?;
+
+    println!("Writing EPC: {}", display::hex(&epc_bytes));
+    reader.send(&crate::WriteLabel {
+        access_password: [0x00; 4],
+        bank: crate::MemBank::Epc,
+        address: 0,
+        data: epc_bytes.clone(),
+    })?;
+
+    clear_select(reader)?;
+
+    let verify_epc = wait_for_tag(reader)?;
+    if verify_epc == epc_bytes {
+        println!("Verified: EPC written correctly");
+    } else {
+        println!(
+            "Warning: read back {} expected {}",
+            display::hex(&verify_epc),
+            display::hex(&epc_bytes)
+        );
+    }
+    Ok(())
+}
+
+fn cmd_write_mem(
+    reader: &mut Reader,
+    data: &str,
+    bank: u8,
+    addr: u16,
+    select: Option<&String>,
+) -> Result<()> {
+    let data_bytes = parse_hex(data)?;
+    if data_bytes.is_empty() || !data_bytes.len().is_multiple_of(2) {
+        anyhow::bail!("data must be a non-empty even number of hex characters");
+    }
+
+    let mem_bank = crate::MemBank::from_byte(bank)
+        .ok_or_else(|| anyhow::anyhow!("invalid bank {bank}, must be 0-3"))?;
+
+    let select_epc = resolve_select_epc(select)?;
+
+    let current_epc = wait_for_tag(reader)?;
+    let target = select_epc.as_ref().unwrap_or(&current_epc);
+    select_tag(reader, target)?;
+
+    println!(
+        "Writing {} bytes to {mem_bank} bank, addr 0x{addr:04X}...",
+        data_bytes.len(),
+    );
+
+    reader.send(&crate::WriteLabel {
+        access_password: [0x00; 4],
+        bank: mem_bank,
+        address: addr,
+        data: data_bytes,
+    })?;
+
+    clear_select(reader)?;
+    println!("Done");
+    Ok(())
+}
+
+fn cmd_lock(
+    reader: &mut Reader,
+    password: &str,
+    lock_data: &str,
+    select: Option<&String>,
+) -> Result<()> {
+    let pwd_bytes = parse_hex(password)?;
+    if pwd_bytes.len() != 4 {
+        anyhow::bail!("password must be exactly 8 hex characters (4 bytes)");
+    }
+
+    let ld_bytes = parse_hex(lock_data)?;
+    if ld_bytes.len() != 3 {
+        anyhow::bail!("lock-data must be exactly 6 hex characters (3 bytes)");
+    }
+
+    let select_epc = resolve_select_epc(select)?;
+
+    let current_epc = wait_for_tag(reader)?;
+    let target = select_epc.as_ref().unwrap_or(&current_epc);
+    select_tag(reader, target)?;
+
+    let mut lock_data_arr = [0u8; 3];
+    lock_data_arr.copy_from_slice(&ld_bytes);
+    println!("Locking tag (lock_data={lock_data})...");
+
+    let mut pwd_arr = [0u8; 4];
+    pwd_arr.copy_from_slice(&pwd_bytes);
+
+    reader.send(&crate::LockTag {
+        password: pwd_arr,
+        lock_data: lock_data_arr,
+    })?;
+
+    clear_select(reader)?;
+    println!("Tag locked");
+    Ok(())
+}
+
+fn cmd_region(reader: &mut Reader, area: Option<&String>) -> Result<()> {
+    match area {
+        None => {
+            let region = reader.send(&crate::GetWorkingArea)?;
+            let channel = reader.send(&crate::GetWorkingChannel)?;
+            let freq = region.channel_frequency(channel);
+            println!("Region:  {region}");
+            println!("Channel: {channel} ({freq:.2} MHz)");
+        }
+        Some(area_str) => {
+            let region = match area_str.to_lowercase().as_str() {
+                "china900" | "cn900" => crate::Region::China900Mhz,
+                "china800" | "cn800" => crate::Region::China800Mhz,
+                "eu" => crate::Region::Eu,
+                "us" => crate::Region::Us,
+                "korea" | "kr" => crate::Region::Korea,
+                _ => anyhow::bail!(
+                    "unknown region: {area_str} (valid: china900, china800, eu, us, korea)"
+                ),
+            };
+            println!("Setting region to {region}...");
+            reader.send(&crate::SetWorkingArea(region))?;
+            println!("Done");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_power(reader: &mut Reader, level: Option<&f64>) -> Result<()> {
+    match level {
+        None => {
+            let power = reader.send(&crate::GetTransmitPower)?;
+            println!("Power: {power:.1} dBm");
+        }
+        Some(dbm) => {
+            if !(0.0..=30.0).contains(dbm) {
+                anyhow::bail!("power must be between 0.0 and 30.0 dBm");
+            }
+            println!("Setting power to {dbm:.1} dBm...");
+            reader.send(&crate::SetTransmitPower(*dbm))?;
+            let verify = reader.send(&crate::GetTransmitPower)?;
+            println!("Power set to {verify:.1} dBm");
+        }
+    }
+    Ok(())
+}
+
+/// Run the CLI application.
+///
+/// # Errors
+///
+/// Returns an error if the serial port cannot be opened, a command fails,
+/// or the user provides invalid arguments.
+pub fn run() -> Result<()> {
+    env_logger::init();
+    let cli = Cli::parse();
+
+    let port = serialport::new(&cli.port, cli.baud)
+        .timeout(Duration::from_millis(500))
+        .open()
+        .context("failed to open serial port")?;
+
+    let mut reader = crate::sync::SyncReader::new(port);
+
+    match cli.command {
+        Commands::Info => cmd_info(&mut reader)?,
+        Commands::Poll => cmd_poll(&mut reader),
+        Commands::Scan { no_stop } => cmd_scan(&mut reader, no_stop)?,
+        Commands::StopScan => {
+            stop_scan(&mut reader)?;
             println!("Scan stopped.");
         }
-
-        Commands::Write { epc, select } => {
-            let epc_bytes = parse_hex(&epc)?;
-            if epc_bytes.len() != 12 {
-                anyhow::bail!("EPC must be exactly 24 hex characters (12 bytes)");
-            }
-            let select_bytes = match &select {
-                Some(s) => {
-                    let b = parse_hex(s)?;
-                    if b.len() != 12 {
-                        anyhow::bail!("--select EPC must be exactly 24 hex characters");
-                    }
-                    Some(b)
-                }
-                None => None,
-            };
-
-            println!("Writing EPC: {}", epc);
-
-            println!("Place a tag on the antenna...");
-            let current_epc = loop {
-                let tags = connector.single_polling_instruction()?;
-                if let Some(tag) = tags.first() {
-                    break parse_hex(&tag.epc)?;
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            };
-
-            let select_epc = select_bytes.as_ref().unwrap_or(&current_epc);
-            println!("Selecting tag: {}", hex(select_epc));
-            println!("Tag detected, writing...");
-            if select_bytes.is_some() {
-                // --select gates the write: only the tag matching this EPC may be
-                // written. A WriteFail must not fall back to any other tag, so the
-                // rediscovery logic of write_epc_reliable is intentionally skipped.
-                connector.select_tag(select_epc)?;
-                connector.write_epc(&epc_bytes)?;
-            } else {
-                connector.write_epc_reliable(select_epc, &epc_bytes, 3)?;
-            }
-            connector.clear_select()?;
-            let tags = connector.single_polling_instruction()?;
-            if let Some(tag) = tags.first() {
-                if tag.epc.eq_ignore_ascii_case(&hex(&epc_bytes)) {
-                    println!("  Verified: {}", tag.epc);
-                } else {
-                    println!(
-                        "Warning: tag reads as {}, expected {}",
-                        tag.epc,
-                        hex(&epc_bytes)
-                    );
-                }
-            } else {
-                println!("Warning: could not read back tag for verification.");
-            }
-        }
-
-        Commands::WriteMem {
-            data,
-            bank,
-            addr,
-            access,
-            select,
-        } => {
-            let data_bytes = parse_hex(&data)?;
-            if data_bytes.is_empty() || data_bytes.len() % 2 != 0 {
-                anyhow::bail!("Data must be a non-empty even number of hex characters");
-            }
-            let access_bytes = parse_hex(&access)?;
-            if access_bytes.len() != 4 {
-                anyhow::bail!("--access must be exactly 8 hex characters (4 bytes)");
-            }
-            let select_bytes = match &select {
-                Some(s) => {
-                    let b = parse_hex(s)?;
-                    if b.len() != 12 {
-                        anyhow::bail!("--select EPC must be exactly 24 hex characters");
-                    }
-                    Some(b)
-                }
-                None => None,
-            };
-
-            let bank_name = match bank {
-                0 => "Reserved",
-                1 => "EPC",
-                2 => "TID",
-                3 => "User",
-                _ => "Unknown",
-            };
-            println!(
-                "Writing {} bytes to bank {} ({}), addr 0x{:04X}...",
-                data_bytes.len(),
-                bank,
-                bank_name,
-                addr
-            );
-
-            println!("Place a tag on the antenna...");
-            let current_epc = loop {
-                let tags = connector.single_polling_instruction()?;
-                if let Some(tag) = tags.first() {
-                    break parse_hex(&tag.epc)?;
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            };
-            let select_epc = select_bytes.as_ref().unwrap_or(&current_epc);
-            println!("Selecting tag: {}", hex(select_epc));
-            connector.select_tag(select_epc)?;
-            connector.write_mem(&access_bytes, bank, addr, &data_bytes)?;
-            connector.clear_select()?;
-            println!("  Wrote: {}", hex(&data_bytes));
-        }
-
-        Commands::Kill { password, select } => {
-            let pwd_bytes = parse_hex(&password)?;
-            if pwd_bytes.len() != 4 {
-                anyhow::bail!("Kill password must be exactly 8 hex characters (4 bytes)");
-            }
-            let select_bytes = match &select {
-                Some(s) => {
-                    let b = parse_hex(s)?;
-                    if b.len() != 12 {
-                        anyhow::bail!("--select EPC must be exactly 24 hex characters");
-                    }
-                    Some(b)
-                }
-                None => None,
-            };
-
-            println!("Place a tag on the antenna...");
-            let current_epc = loop {
-                let tags = connector.single_polling_instruction()?;
-                if let Some(tag) = tags.first() {
-                    break parse_hex(&tag.epc)?;
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            };
-            let select_epc = select_bytes.as_ref().unwrap_or(&current_epc);
-            println!("Selecting tag: {}", hex(select_epc));
-            connector.select_tag(select_epc)?;
-            println!("Killing tag with password {}...", hex(&pwd_bytes));
-            connector.kill_tag(&pwd_bytes)?;
-            connector.clear_select()?;
-            println!("Tag killed.");
-        }
-
-        Commands::Lock {
-            password,
-            lock_data,
-            select,
-        } => {
-            let pwd_bytes = parse_hex(&password)?;
-            if pwd_bytes.len() != 4 {
-                anyhow::bail!("Lock password must be exactly 8 hex characters (4 bytes)");
-            }
-            let ld_bytes = parse_hex(&lock_data)?;
-            if ld_bytes.len() != 3 {
-                anyhow::bail!("--lock-data must be exactly 6 hex characters (3 bytes)");
-            }
-            let select_bytes = match &select {
-                Some(s) => {
-                    let b = parse_hex(s)?;
-                    if b.len() != 12 {
-                        anyhow::bail!("--select EPC must be exactly 24 hex characters");
-                    }
-                    Some(b)
-                }
-                None => None,
-            };
-
-            println!("Place a tag on the antenna...");
-            let current_epc = loop {
-                let tags = connector.single_polling_instruction()?;
-                if let Some(tag) = tags.first() {
-                    break parse_hex(&tag.epc)?;
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            };
-            let select_epc = select_bytes.as_ref().unwrap_or(&current_epc);
-            println!("Selecting tag: {}", hex(select_epc));
-            connector.select_tag(select_epc)?;
-            println!(
-                "Locking tag (password {}, lock data {})...",
-                hex(&pwd_bytes),
-                hex(&ld_bytes)
-            );
-            connector.lock_tag(&pwd_bytes, &ld_bytes)?;
-            connector.clear_select()?;
-            println!("Tag locked.");
-        }
-
         Commands::Read {
             bank,
             addr,
             length,
-            access,
             select,
-        } => {
-            let access_bytes = parse_hex(&access)?;
-            if access_bytes.len() != 4 {
-                anyhow::bail!("--access must be exactly 8 hex characters (4 bytes)");
-            }
-            let select_bytes = match &select {
-                Some(s) => {
-                    let b = parse_hex(s)?;
-                    if b.len() != 12 {
-                        anyhow::bail!("--select EPC must be exactly 24 hex characters");
-                    }
-                    Some(b)
-                }
-                None => None,
-            };
-
-            println!("Place a tag on the antenna...");
-            let current_epc = loop {
-                let tags = connector.single_polling_instruction()?;
-                if let Some(tag) = tags.first() {
-                    break parse_hex(&tag.epc)?;
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            };
-            let select_epc = select_bytes.as_ref().unwrap_or(&current_epc);
-            println!("Selecting tag: {}", hex(select_epc));
-            connector.select_tag(select_epc)?;
-            let bank_name = match bank {
-                0 => "Reserved",
-                1 => "EPC",
-                2 => "TID",
-                3 => "User",
-                _ => "Unknown",
-            };
-            println!(
-                "Reading bank {} ({}), addr 0x{:04X}, {} words...",
-                bank, bank_name, addr, length
-            );
-            let data = connector.read_mem(&access_bytes, bank, addr, length)?;
-            println!("  Data: {}", hex(&data));
-            connector.clear_select()?;
-        }
-
-        Commands::Region { area } => {
-            let area_enum = match area.as_str() {
-                "china900" => WorkingArea::China900Mhz,
-                "china800" => WorkingArea::China800Mhz,
-                "eu" => WorkingArea::EU,
-                "us" => WorkingArea::US,
-                "korea" => WorkingArea::Korea,
-                _ => unreachable!(),
-            };
-            connector.set_working_area(area_enum)?;
-            println!("Region set to {:?}.", area_enum);
-        }
-
-        Commands::Power { level } => match level {
-            Some(p) => {
-                connector.set_transmission_power(p)?;
-                println!("Power set to {} dBm.", p);
-            }
-            None => {
-                let p = connector.get_transmit_power()?;
-                println!("Power: {} dBm", p);
-            }
-        },
+        } => cmd_read(&mut reader, bank, addr, length, select.as_ref())?,
+        Commands::Write { epc, select } => cmd_write(&mut reader, &epc, select.as_ref())?,
+        Commands::WriteMem {
+            data,
+            bank,
+            addr,
+            select,
+        } => cmd_write_mem(&mut reader, &data, bank, addr, select.as_ref())?,
+        Commands::Lock {
+            password,
+            lock_data,
+            select,
+        } => cmd_lock(&mut reader, &password, &lock_data, select.as_ref())?,
+        Commands::Region { area } => cmd_region(&mut reader, area.as_ref())?,
+        Commands::Power { level } => cmd_power(&mut reader, level.as_ref())?,
     }
 
     Ok(())

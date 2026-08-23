@@ -1,105 +1,71 @@
-# r200_uhf — R200 UHF serial protocol (Rust)
+# r200_uhf
 
-## Overview
-- A small Rust library to talk with R200 UHF RFID reader modules over a serial port.
-- Exposes a simple `Connector` API (blocking `SyncIO` or async `AsyncIO`) to query
-  device info, inventory tags, and read/write/kill/lock tag memory banks.
+Rust library for the [R200 UHF RFID reader](https://www.aliexpress.com/item/4000281733851.html) family (M100, QM100).
 
-## Supported operations
-- Inventory: single and multiple polling instruction, tag selection.
-- Memory: read and write any Gen2 memory bank (Reserved, EPC, TID, User).
-- Tag lifecycle: kill and lock a tag.
-- Radio: working area (region), working channel, transmission power.
+## Quick start
 
-## Getting started
-### Requirements
-- Rust toolchain (stable)
-- Access to a serial port where the [R200 UHF reader](https://www.aliexpress.com/item/4000281733851.html) is connected 
-
-### Add dependency:
 ```toml
 [dependencies]
-r200_uhf = "0.5"
-serialport = "4.8"
+r200_uhf = "0.7"
+serialport = "4"
 ```
 
-## Run the example (quick start)
-This repo includes an example that opens a serial port, configures power, and continuously reads tags.
-
-- Linux/macOS example:
-  cargo run --example std_pc_serial -- /dev/ttyUSB0 115200
-
-- Windows example (port name may vary):
-  cargo run --example std_pc_serial -- COM3 115200
-
-Notes
-- The baud argument is optional and defaults to 115200 when omitted.
-- The example prints module info, current working area/channel, transmission power, and then logs any detected tags.
-
-Minimal usage example (library)
-
 ```rust
-use r200_uhf::Connector;
 use std::time::Duration;
-use serialport;
+use r200_uhf::sync::SyncReader;
+use r200_uhf::{GetModuleInfo, ModuleInfoParam, SinglePollingInstruction};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Open the serial port to the R200 module
-    let port = serialport::new("/dev/ttyUSB0", 115200)
-        .timeout(Duration::from_millis(500))
-        .open()?;
+let port = serialport::new("/dev/ttyUSB0", 115200)
+    .timeout(Duration::from_millis(500))
+    .open()?;
 
-    // Create the Connector
-    let mut conn = Connector::new(port);
+let mut reader = SyncReader::new(port);
 
-    // Query some information
-    let _info = conn.get_module_info()?;
+let info = reader.send(&GetModuleInfo {
+    param: ModuleInfoParam::SoftwareVersion,
+})?;
+println!("Firmware: {}", info.text);
 
-    // Read tags once
-    let tags = conn.single_polling_instruction()?;
-    for t in tags {
-        println!("{}", t); // Rfid implements Display
-        // Access UID as hex string: t.uid()
-    }
-
-    // Read 2 words from the reserved bank of the selected tag
-    let words = conn.read_mem(&[0, 0, 0, 0], 0, 0, 2)?;
-
-    // Write a new EPC (bank 1, word address 2)
-    conn.write_epc(&[0xE0, 0x28, 0x06, 0x91, 0x05, 0x00])?;
-
-    Ok(())
+if let Some(tag) = reader.send(&SinglePollingInstruction)? {
+    println!("Found: {tag}");
 }
 ```
 
-For non-blocking I/O enable the `async` feature:
+### Async
 
 ```toml
-r200_uhf = { version = "0.5", features = ["async"] }
+r200_uhf = { version = "0.7", features = ["async"] }
 ```
 
-## CLI (`r200`)
+```rust
+use r200_uhf::async_transport::AsyncReader;
 
-This crate ships an optional command-line interface, exposed as a `r200` binary.
-It is gated behind the `cli` cargo feature (off by default) and talks to the
-reader using the blocking `SyncIO` API.
+let port = tokio_serial::new("/dev/ttyUSB0", 115200)
+    .open_native_async()?;
+let mut reader = AsyncReader::new(port);
+
+let tag = reader.send(&SinglePollingInstruction).await?;
+```
+
+### Serde
+
+Enable the `serde` feature to derive `Serialize` / `Deserialize` on `Tag`, `Region`, `MemBank`, and other public types:
+
+```toml
+r200_uhf = { version = "0.7", features = ["serde"] }
+```
+
+## CLI
+
+The `r200` binary provides a command-line interface, gated behind the `cli` feature.
 
 ### Install
-
-Install the latest published release of the `r200` binary from crates.io:
 
 ```sh
 cargo install r200_uhf --features cli
 ```
 
-Or build and install it from this repository:
-
-```sh
-cargo install --path . --features cli
-```
-
-Either way, `r200` ends up in `~/.cargo/bin`. Alternatively, run it directly
-without installing:
+Or run directly:
 
 ```sh
 cargo run --features cli --bin r200 -- --port /dev/ttyUSB0 info
@@ -107,44 +73,61 @@ cargo run --features cli --bin r200 -- --port /dev/ttyUSB0 info
 
 ### Usage
 
-The serial port is given with `--port` (or the `R200_PORT` environment
-variable); it must come from one of the two. The baud rate defaults to 115200
-and can be set with `--baud`.
-
-Here the port is set once via the environment, so it can be omitted from every
-command:
+Set the port once via environment:
 
 ```sh
 export R200_PORT=/dev/ttyUSB0
 
-# Show module info and current region/power
-r200 info
-
-# Wait until a tag is detected and print it
-r200 poll
-
-# Continuously scan for tags until Ctrl+C (no duplicates)
-r200 scan
-
-# Read 6 words from the EPC bank (bank 1, addr 0)
-r200 read --bank 1 --addr 0 --length 6
-
-# Write a new 12-byte EPC (24 hex chars)
-r200 write E28069150000501D63E2784F
-
-# Set the RF region (china900, china800, eu, us, korea)
-r200 region eu
-
-# Get or set the transmit power in dBm
-r200 power
-r200 power 26.5
+r200 info                                  # module info, region, channel, power
+r200 poll                                  # wait for a tag
+r200 scan                                  # continuous scan (Ctrl+C to stop)
+r200 scan --no-stop                        # scan without sending stop command on exit
+r200 stop-scan                             # stop a running scan
+r200 read --bank 1 --addr 0 --length 6     # read 6 words from EPC bank
+r200 write E28069150000501D63E2784F        # write a new EPC
+r200 writemem AA --bank 3 --addr 0         # write to User bank
+r200 lock --lock-data 020080               # lock User bank
+r200 region eu                             # set region
+r200 power                                 # show power
+r200 power 26.5                            # set power (dBm)
 ```
 
-Run `r200 --help` or `r200 <command> --help` for the full list of commands and
-options.
+Run `r200 --help` or `r200 <command> --help` for full options.
 
-Legal and safety note
-- Transmission power and permitted frequencies vary by country/region. Ensure compliance with your local regulations. The example sets or checks transmission power; adjust it responsibly.
+## Feature flags
 
-License
-- MIT License. See LICENSE for details.
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `async` | off | `AsyncReader` over tokio `AsyncRead+AsyncWrite` |
+| `cli` | off | `r200` binary (clap, serialport, ctrlc) |
+| `serde` | off | `Serialize`/`Deserialize` on public types |
+
+The `SyncReader` is always available (no external dependencies).
+
+## Supported commands
+
+| Command | Code | Description |
+|---------|------|-------------|
+| `GetModuleInfo` | 0x03 | Hardware/software version, manufacturer |
+| `SinglePollingInstruction` | 0x22 | Read one tag from the RF field |
+| `MultiplePollingInstruction` | 0x27 | Continuous inventory |
+| `StopMultiplePolling` | 0x28 | Stop continuous inventory |
+| `SetSelect` | 0x0C | Set tag select mask |
+| `SetSendSelect` | 0x12 | Enable/disable select |
+| `ReadLabel` | 0x39 | Read tag memory |
+| `WriteLabel` | 0x49 | Write tag memory |
+| `KillTag` | 0x65 | Kill a tag |
+| `LockTag` | 0x82 | Lock memory banks |
+| `GetWorkingArea` | 0x08 | Get RF region |
+| `SetWorkingArea` | 0x07 | Set RF region |
+| `GetWorkingChannel` | 0xAA | Get current channel |
+| `GetTransmitPower` | 0xB7 | Get power (dBm) |
+| `SetTransmitPower` | 0xB6 | Set power (dBm) |
+
+## Legal and safety note
+
+Transmission power and permitted frequencies vary by country/region. Ensure compliance with your local regulations and adjust it responsibly.
+
+## License
+
+MIT License. See LICENSE for details.

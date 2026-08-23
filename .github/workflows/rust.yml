@@ -4,23 +4,66 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
 
 jobs:
-  build:
-
+  check:
+    name: Format + Clippy + Test
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v4
-    - name: Install system dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y libudev-dev pkg-config
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose --all-features
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y libudev-dev pkg-config
+      - name: Format
+        run: cargo fmt -- --check
+      - name: Clippy (all features)
+        run: cargo clippy --all-features -- -D warnings
+      - name: Test (all features)
+        run: cargo test --all-features
+      - name: Docs
+        run: cargo doc --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  features:
+    name: Per-feature build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y libudev-dev pkg-config
+      - name: Build (no default features)
+        run: cargo build --no-default-features
+      - name: Build (async)
+        run: cargo build --no-default-features --features async
+      - name: Build (serde)
+        run: cargo build --no-default-features --features serde
+      - name: Build (cli)
+        run: cargo build --no-default-features --features cli
+
+  msrv:
+    name: MSRV (1.87)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.87.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y libudev-dev pkg-config
+      - name: Build (all features)
+        run: cargo build --all-features

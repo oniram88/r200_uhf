@@ -2,6 +2,7 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+
 ## 0.6.0 - 2026-08-16
 #### Features
 - Add Write/Lock/Kill features - (9687ad9) - Beni Bachmann

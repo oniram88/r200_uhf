@@ -1,35 +1,64 @@
-//! Serial protocol library for R200 UHF RFID reader modules (e.g. M100).
+//! A sans-io serial protocol library for R200 UHF RFID readers (M100 / QM100).
 //!
-//! Provides a [`Connector`](connector::Connector) API over a serial port for
-//! device info, RF settings, tag inventory, and tag memory access (read/write,
-//! select, lock, kill).
+//! The crate is organized around a small, dependency-free [`core`] that encodes
+//! and decodes the wire protocol, plus transport adapters that drive it over
+//! actual I/O:
 //!
-//! Two trait families are available:
-//! - [`sync::SyncIO`](connector::sync::SyncIO) for blocking usage.
-//! - [`async::AsyncIO`](connector::AsyncIO) (feature `async`) for `tokio`.
+//! - [`sync::SyncReader`] — blocking, works over any [`std::io::Read`] +
+//!   [`std::io::Write`] (e.g. a `serialport` handle). Always available.
+//! - [`async_transport::AsyncReader`] — tokio-based, behind the `async` feature.
 //!
-//! ```no_run
-//! use r200_uhf::connector::Connector;
-//! use r200_uhf::connector::sync::SyncIO;
+//! Commands implement the [`Command`](core::command::Command) trait, which pairs
+//! a request encoding with a typed response decoding. A [`Frame`] wraps each
+//! command on the wire with a header, length, checksum and end marker.
+//!
+//! # Example
+//!
+//! ```ignore
+//! use std::time::Duration;
+//! use r200_uhf::sync::SyncReader;
+//! use r200_uhf::{GetModuleInfo, ModuleInfoParam, SinglePollingInstruction};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let port = serialport::new("/dev/ttyUSB0", 115200).open()?;
-//! let mut conn = Connector::new(port);
-//! let tags = conn.single_polling_instruction()?;
-//! for tag in tags {
-//!     println!("{}", tag.uid());
+//! let port = serialport::new("/dev/ttyUSB0", 115200)
+//!     .timeout(Duration::from_millis(500))
+//!     .open()?;
+//! let mut reader = SyncReader::new(port);
+//!
+//! let info = reader.send(&GetModuleInfo { param: ModuleInfoParam::SoftwareVersion })?;
+//! println!("Firmware: {}", info.text);
+//!
+//! if let Some(tag) = reader.send(&SinglePollingInstruction)? {
+//!     println!("Found: {tag}");
 //! }
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Feature flags
+//!
+//! - `async` — [`async_transport::AsyncReader`] over tokio.
+//! - `cli` — the `r200` binary.
+//! - `serde` — `Serialize`/`Deserialize` on public data types.
 
-pub mod connector;
+pub mod core;
+mod util;
+
+pub mod sync;
+
+#[cfg(feature = "async")]
+pub mod async_transport;
 
 #[cfg(feature = "cli")]
 pub mod cli;
 
-mod frame;
-mod packet;
-mod rfid;
-
-pub use rfid::Rfid;
+pub use core::command::{
+    GetModuleInfo, GetTransmitPower, GetWorkingArea, GetWorkingChannel, KillTag, LockTag, MemBank,
+    ModuleInfoParam, ModuleInfoResponse, MultiplePollingInstruction, ReadLabel, SetSelect,
+    SetSendSelect, SetTransmitPower, SetWorkingArea, SinglePollingInstruction, StopMultiplePolling,
+    WriteLabel,
+};
+pub use core::error::{CommandError, CoreError, FrameError};
+pub use core::frame::{Frame, FrameType};
+pub use core::region::Region;
+pub use core::tag::Tag;
